@@ -66,7 +66,7 @@ tests/
 |------|-------------|--------|
 | U6 Observabilidad | `logger.py` + `ResultadoCasoRepository` | ✅ Completo — 100% coverage |
 | U1 State Store | `EstadoFlujoRepository` — get, create, update_fase, close | ✅ Completo — 100% coverage |
-| U2 Agente Ingesta | F1 bandeja CRM + F2 historial | ⏳ Pendiente |
+| U2 Agente Ingesta | F1 bandeja CRM + F2 historial | 🔄 F1 completo — F2 pendiente |
 | U3 Agente Expediente | F6 SIC + F7 existencia docs | ⏳ Pendiente |
 | U4 Agente Orbika | F8 Orbika + F9 responsabilidad | ⏳ Pendiente |
 | U5 Agente Cierre | F13 nota CRM + estado | ⏳ Pendiente |
@@ -78,15 +78,45 @@ tests/
 Cada Lambda tool lee su config desde variables de entorno inyectadas por AWS.
 Ver `src/tools/<nombre>/config/` para los valores por ambiente.
 
-| Variable | Descripción |
-|----------|-------------|
-| `ESTADO_FLUJO_TABLE` | Nombre de la tabla DynamoDB EstadoFlujo |
-| `RESULTADO_CASO_TABLE` | Nombre de la tabla DynamoDB ResultadoCaso |
-| `DRY_RUN` | `true` en piloto — el agente no escribe en CRM |
-| `BATCH_SIZE_SSM_PATH` | Path SSM del parámetro BATCH_SIZE |
+| Variable | Descripción | Usado en |
+|----------|-------------|----------|
+| `ESTADO_FLUJO_TABLE` | Nombre de la tabla DynamoDB EstadoFlujo | State Store |
+| `RESULTADO_CASO_TABLE` | Nombre de la tabla DynamoDB ResultadoCaso | Observabilidad |
+| `DRY_RUN` | `true` en piloto — el agente no escribe en CRM | U5 Cierre |
+| `BATCH_SIZE_SSM_PATH` | Path SSM del parámetro BATCH_SIZE | trigger_daily |
+| `SSM_SF_COOKIES_PATH` | Path SSM con cookies de sesión Salesforce | U2 get_bandeja_crm |
+| `SF_BASE_URL` | URL base de la org Salesforce de Sura Panamá | U2 get_bandeja_crm |
 
 ---
 
 ## Rama activa
 
-`HAB-6289` — construcción U6 y U1
+`HAB-6289` — construcción U6, U1 y U2 (F1)
+
+---
+
+## Pendiente próxima sesión
+
+### U2 Agente Ingesta — F1 scraper (requiere acceso Salesforce)
+El scraper `src/tools/get_bandeja_crm/infrastructure/salesforce_scraper.py` tiene
+selectores CSS y columnas **placeholder**. Antes de usar en producción:
+
+1. Abrir el Salesforce de Sura Panamá en Chrome DevTools
+2. Localizar la vista de bandeja de casos (URL real)
+3. Inspeccionar los selectores de la tabla y el orden de columnas
+4. Actualizar `_SELECTOR_TABLA`, `_SELECTOR_FILAS` y `_extraer_casos()` con los valores reales
+5. Ejecutar el scraper en modo headful (`headless=False`) para validar
+
+### U2 Agente Ingesta — F2 (siguiente a implementar)
+Lambda tool `review_historial_crm`:
+- Lee el historial de notas del caso en Salesforce (RPA, mismas cookies)
+- Detecta si aplica el criterio Panamá (ítem §4.1 del protocolo)
+- Retorna `HistorialCRM` con `aplica_criterio_panama: bool` + extracto relevante
+
+### Decisión de infraestructura pendiente
+CDK vs Terraform — esperando respuesta del equipo de arquitectura.
+Una vez definido, correr `/mommo-devops` para aprovisionar:
+- DynamoDB: EstadoFlujo + ResultadoCaso
+- Lambdas de cada tool + Lambda trigger_daily
+- Bedrock: Agente supervisor + 4 sub-agentes + Knowledge Base
+- SSM: BATCH_SIZE + SSM_SF_COOKIES_PATH (requiere auth manual inicial)
