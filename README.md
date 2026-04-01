@@ -65,7 +65,7 @@ tests/
 | Unit | Descripción | Estado |
 |------|-------------|--------|
 | U6 Observabilidad | `logger.py` + `ResultadoCasoRepository` | ✅ Completo — 100% coverage |
-| U1 State Store | Helpers DynamoDB `EstadoFlujo` | 🔄 En progreso |
+| U1 State Store | `EstadoFlujoRepository` — get, create, update_fase, close | ✅ Completo — 100% coverage |
 | U2 Agente Ingesta | F1 bandeja CRM + F2 historial | ⏳ Pendiente |
 | U3 Agente Expediente | F6 SIC + F7 existencia docs | ⏳ Pendiente |
 | U4 Agente Orbika | F8 Orbika + F9 responsabilidad | ⏳ Pendiente |
