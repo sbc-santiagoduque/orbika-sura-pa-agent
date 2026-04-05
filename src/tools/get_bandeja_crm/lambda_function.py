@@ -1,19 +1,18 @@
 """
 Lambda Tool: get_bandeja_crm
-Acción: F1 — Obtener bandeja CRM de Salesforce
+Acción: F1 — Obtener lista de casos del reporte de Salesforce
 
 Invocada por el Agente Ingesta (Bedrock Action Group).
-Retorna los casos activos priorizados listos para procesar.
+Retorna los casos en el orden del reporte — Sura Panamá define la prioridad
+configurando el reporte directamente en Salesforce.
 """
 import json
 import logging
 import os
 
-from src.tools.get_bandeja_crm.service.bandeja_service import BandejaService
-
 logger = logging.getLogger(__name__)
 
-# Bedrock Action Group espera esta firma exacta
+
 def lambda_handler(event, context):
     """
     Punto de entrada para Bedrock Action Group.
@@ -22,21 +21,19 @@ def lambda_handler(event, context):
     {
         "actionGroup": "agente-ingesta-actions",
         "function": "get_bandeja_crm",
-        "parameters": []  # sin parámetros — lee la bandeja completa
+        "parameters": []
     }
     """
-    action_group = event.get("actionGroup", "")
-    function_name = event.get("function", "")
+    function_name = event.get("function", "get_bandeja_crm")
 
     logger.info("get_bandeja_crm invocada", extra={
-        "action_group": action_group,
-        "function": function_name,
+        "action_group": event.get("actionGroup"),
     })
 
     try:
         _validate_env_vars()
-        resultado = _process()
-        return _format_response(function_name, resultado)
+        casos = _process()
+        return _format_response(function_name, casos)
 
     except Exception as exc:
         logger.error("Error en get_bandeja_crm", extra={"error": str(exc)})
@@ -44,32 +41,24 @@ def lambda_handler(event, context):
 
 
 def _validate_env_vars():
-    """Valida que las variables de entorno requeridas estén presentes."""
-    required = ["SSM_SF_COOKIES_PATH", "SF_BASE_URL"]
+    required = ["SSM_SF_COOKIES_PATH", "SF_REPORT_URL"]
     missing = [v for v in required if not os.environ.get(v)]
     if missing:
         raise EnvironmentError(f"Variables de entorno faltantes: {missing}")
 
 
 def _process() -> list[dict]:
-    """Scrapea Salesforce y retorna la bandeja priorizada."""
-    # Import local para que el módulo sea importable sin playwright instalado en tests
+    # Import local para no bloquear tests sin Playwright instalado
     from src.tools.get_bandeja_crm.infrastructure.salesforce_scraper import SalesforceScraper
+
     scraper = SalesforceScraper(
         ssm_cookies_path=os.environ["SSM_SF_COOKIES_PATH"],
-        base_url=os.environ["SF_BASE_URL"],
+        report_url=os.environ["SF_REPORT_URL"],
     )
-    casos_raw = scraper.obtener_bandeja()
-
-    service = BandejaService()
-    return service.priorizar(casos_raw)
+    return scraper.obtener_bandeja()
 
 
 def _format_response(function_name: str, casos: list[dict]) -> dict:
-    """
-    Formato de respuesta que espera Bedrock Action Group.
-    https://docs.aws.amazon.com/bedrock/latest/userguide/agents-lambda.html
-    """
     return {
         "actionGroup": "agente-ingesta-actions",
         "function": function_name,
@@ -87,7 +76,6 @@ def _format_response(function_name: str, casos: list[dict]) -> dict:
 
 
 def _format_error(function_name: str, message: str) -> dict:
-    """Respuesta de error en formato Bedrock Action Group."""
     return {
         "actionGroup": "agente-ingesta-actions",
         "function": function_name,

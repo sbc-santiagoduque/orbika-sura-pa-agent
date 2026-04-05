@@ -1,59 +1,94 @@
+import json
 import pytest
 from unittest.mock import MagicMock, patch
-from src.tools.get_bandeja_crm.service.bandeja_service import BandejaService
 
-# Casos sin ordenar que devolvería el scraper de Salesforce
-CASOS_RAW = [
-    {"case_id": "C-003", "placa": "ZZZ999", "canal": "SIC",
-     "fecha_siniestro": "2026-03-10T08:00:00Z",
-     "fecha_recepcion": "2026-03-20T09:00:00Z", "sla_alert": False},
-    {"case_id": "C-001", "placa": "ABC123", "canal": "Comunidad",
-     "fecha_siniestro": "2026-03-12T08:00:00Z",
-     "fecha_recepcion": "2026-03-18T08:00:00Z", "sla_alert": True},
-    {"case_id": "C-002", "placa": "XYZ456", "canal": "SIC",
-     "fecha_siniestro": "2026-03-11T08:00:00Z",
-     "fecha_recepcion": "2026-03-19T10:00:00Z", "sla_alert": False},
+import src.tools.get_bandeja_crm.lambda_function as handler_module
+
+EVENT_BASE = {
+    "actionGroup": "agente-ingesta-actions",
+    "function": "get_bandeja_crm",
+    "parameters": [],
+}
+
+ENV_VARS = {
+    "SSM_SF_COOKIES_PATH": "/agente-analista/salesforce/cookies",
+    "SF_REPORT_URL": "https://surapa.lightning.force.com/lightning/r/Report/00OS6000006Sz9xMAC/view",
+}
+
+CASOS_SCRAPER = [
+    {"case_number": "02188582", "sf_record_id": "500VY00000ic55TYAQ"},
+    {"case_number": "02188590", "sf_record_id": "500VY00000ic60XBAQ"},
+    {"case_number": "02188601", "sf_record_id": "500VY00000ic71YCAQ"},
 ]
 
 
-class TestBandejaService:
-    def test_prioriza_sla_alert_primero(self):
-        """Casos con SLA en riesgo deben ir antes que los demás."""
-        service = BandejaService()
-        resultado = service.priorizar(CASOS_RAW)
+class TestGetBandejaCrmHandler:
+    @patch("src.tools.get_bandeja_crm.infrastructure.salesforce_scraper.SalesforceScraper")
+    def test_retorna_formato_bedrock_action_group(self, mock_scraper_cls, monkeypatch):
+        """La respuesta debe seguir el formato que Bedrock AG espera."""
+        for k, v in ENV_VARS.items():
+            monkeypatch.setenv(k, v)
 
-        assert resultado[0]["case_id"] == "C-001"  # sla_alert=True
-        assert resultado[0]["prioridad"] == 1
+        mock_scraper_cls.return_value.obtener_bandeja.return_value = CASOS_SCRAPER
 
-    def test_sin_sla_ordena_por_fecha_recepcion_ascendente(self):
-        """Sin SLA, el más antiguo en la bandeja va primero."""
-        service = BandejaService()
-        resultado = service.priorizar(CASOS_RAW)
+        resultado = handler_module.lambda_handler(EVENT_BASE, {})
 
-        # C-003 recibido 2026-03-20, C-002 recibido 2026-03-19
-        # C-002 va antes porque llegó antes
-        ids_sin_sla = [c["case_id"] for c in resultado if not c["sla_alert"]]
-        assert ids_sin_sla == ["C-002", "C-003"]
+        assert resultado["actionGroup"] == "agente-ingesta-actions"
+        assert resultado["function"] == "get_bandeja_crm"
+        body = json.loads(resultado["functionResponse"]["responseBody"]["TEXT"]["body"])
+        assert "casos" in body
+        assert isinstance(body["total"], int)
 
-    def test_prioridad_es_consecutiva_desde_1(self):
-        service = BandejaService()
-        resultado = service.priorizar(CASOS_RAW)
+    @patch("src.tools.get_bandeja_crm.infrastructure.salesforce_scraper.SalesforceScraper")
+    def test_respeta_orden_del_reporte(self, mock_scraper_cls, monkeypatch):
+        """Los casos deben devolverse en el orden exacto que retorna el scraper."""
+        for k, v in ENV_VARS.items():
+            monkeypatch.setenv(k, v)
 
-        prioridades = [c["prioridad"] for c in resultado]
-        assert prioridades == [1, 2, 3]
+        mock_scraper_cls.return_value.obtener_bandeja.return_value = CASOS_SCRAPER
 
-    def test_bandeja_vacia_retorna_lista_vacia(self):
-        service = BandejaService()
-        assert service.priorizar([]) == []
+        resultado = handler_module.lambda_handler(EVENT_BASE, {})
+        body = json.loads(resultado["functionResponse"]["responseBody"]["TEXT"]["body"])
 
-    def test_todos_con_sla_mantiene_orden_por_fecha_recepcion(self):
-        """Si todos tienen SLA, el orden interno es por fecha_recepcion."""
-        casos = [
-            {**CASOS_RAW[0], "sla_alert": True, "fecha_recepcion": "2026-03-21T00:00:00Z"},
-            {**CASOS_RAW[1], "sla_alert": True, "fecha_recepcion": "2026-03-18T00:00:00Z"},
-        ]
-        service = BandejaService()
-        resultado = service.priorizar(casos)
+        numeros = [c["case_number"] for c in body["casos"]]
+        assert numeros == ["02188582", "02188590", "02188601"]
 
-        # C-001 recibido antes → prioridad 1
-        assert resultado[0]["case_id"] == "C-001"
+    @patch("src.tools.get_bandeja_crm.infrastructure.salesforce_scraper.SalesforceScraper")
+    def test_cada_caso_tiene_case_number_y_sf_record_id(self, mock_scraper_cls, monkeypatch):
+        """Cada elemento debe exponer los dos campos que necesitan las tools downstream."""
+        for k, v in ENV_VARS.items():
+            monkeypatch.setenv(k, v)
+
+        mock_scraper_cls.return_value.obtener_bandeja.return_value = CASOS_SCRAPER
+
+        resultado = handler_module.lambda_handler(EVENT_BASE, {})
+        body = json.loads(resultado["functionResponse"]["responseBody"]["TEXT"]["body"])
+
+        for caso in body["casos"]:
+            assert "case_number" in caso
+            assert "sf_record_id" in caso
+
+    @patch("src.tools.get_bandeja_crm.infrastructure.salesforce_scraper.SalesforceScraper")
+    def test_bandeja_vacia_retorna_total_cero(self, mock_scraper_cls, monkeypatch):
+        """Si el reporte no tiene casos, total debe ser 0."""
+        for k, v in ENV_VARS.items():
+            monkeypatch.setenv(k, v)
+
+        mock_scraper_cls.return_value.obtener_bandeja.return_value = []
+
+        resultado = handler_module.lambda_handler(EVENT_BASE, {})
+        body = json.loads(resultado["functionResponse"]["responseBody"]["TEXT"]["body"])
+
+        assert body["total"] == 0
+        assert body["casos"] == []
+
+    def test_error_si_faltan_env_vars(self, monkeypatch):
+        """Sin variables de entorno retorna respuesta de error estructurada."""
+        monkeypatch.delenv("SSM_SF_COOKIES_PATH", raising=False)
+        monkeypatch.delenv("SF_REPORT_URL", raising=False)
+
+        resultado = handler_module.lambda_handler(EVENT_BASE, {})
+        body = json.loads(resultado["functionResponse"]["responseBody"]["TEXT"]["body"])
+
+        assert "error" in body
+        assert body["total"] == 0
