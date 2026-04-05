@@ -51,8 +51,9 @@ class SalesforceScraper:
         """
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
-            context = browser.new_context()
-            self._session.inject_cookies(context)
+            # new_context con storageState — incluye cookies + localStorage
+            # (el localStorage tiene el token de dispositivo confiable para omitir 2FA)
+            context = self._session.inject_storage_state(browser)
 
             page = context.new_page()
             # domcontentloaded porque Lightning nunca llega a networkidle
