@@ -67,7 +67,7 @@ tests/
 | U6 Observabilidad | `logger.py` + `ResultadoCasoRepository` | ✅ Completo — 100% coverage |
 | U1 State Store | `EstadoFlujoRepository` — get, create, update_fase, close | ✅ Completo — 100% coverage |
 | U2 Agente Ingesta | F1 bandeja CRM + F2 historial | 🔄 F1 completo — F2 pendiente |
-| U3 Agente Expediente | F6 SIC + F7 existencia docs | ⏳ Pendiente |
+| U3 Agente Expediente | F6 SIC + F7 existencia docs | 🔄 F6 completo — F7 pendiente |
 | U4 Agente Orbika | F8 Orbika + F9 responsabilidad | ⏳ Pendiente |
 | U5 Agente Cierre | F13 nota CRM + estado | ⏳ Pendiente |
 
@@ -84,8 +84,11 @@ Ver `src/tools/<nombre>/config/` para los valores por ambiente.
 | `RESULTADO_CASO_TABLE` | Nombre de la tabla DynamoDB ResultadoCaso | Observabilidad |
 | `DRY_RUN` | `true` en piloto — el agente no escribe en CRM | U5 Cierre |
 | `BATCH_SIZE_SSM_PATH` | Path SSM del parámetro BATCH_SIZE | trigger_daily |
-| `SSM_SF_COOKIES_PATH` | Path SSM con cookies de sesión Salesforce | U2 get_bandeja_crm |
-| `SF_BASE_URL` | URL base de la org Salesforce de Sura Panamá | U2 get_bandeja_crm |
+| `SSM_SF_COOKIES_PATH` | Path SSM con storageState de sesión Salesforce | U2 get_bandeja_crm |
+| `SF_REPORT_URL` | URL del reporte de bandeja en Salesforce | U2 get_bandeja_crm |
+| `SSM_SIC_STATE_PATH` | Path SSM con storageState de sesión SIC | U3 extract_expediente_sic |
+| `SSM_SIC_USERNAME_PATH` | Path SSM con usuario SIC | U3 extract_expediente_sic |
+| `SSM_SIC_PASSWORD_PATH` | Path SSM con contraseña SIC | U3 extract_expediente_sic |
 
 ---
 
