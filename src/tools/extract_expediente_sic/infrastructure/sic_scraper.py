@@ -21,7 +21,7 @@ from src.shared.browser.sic_session import SICSession
 logger = logging.getLogger(__name__)
 
 SIC_BASE_URL = "https://sic.connectasistencia.com"
-SIC_LOGIN_URL = f"{SIC_BASE_URL}/login"
+SIC_LOGIN_URL = SIC_BASE_URL
 SIC_SEARCH_URL = f"{SIC_BASE_URL}/events-claims"
 
 # Selectores del login
@@ -35,7 +35,7 @@ _SEL_PLATE_INPUT = "input[placeholder='Buscar Placa Asegurado']"
 _SEL_RESULT_ROWS = "table[aria-label='simple table'] tbody tr"
 
 # Selectores del expediente
-_SEL_GALLERY_IMG = "img[alt='Imagen de galeria']"
+_SEL_GALLERY_IMG = "img[src*='amazonaws']"
 _SEL_DOWNLOAD_BTN = "button.claim-button"
 
 # Opción del select que necesitamos
@@ -89,7 +89,7 @@ class SICScraper:
         return resultado
 
     def _es_pagina_login(self, page: Page) -> bool:
-        return "login" in page.url
+        return page.url.rstrip("/") == SIC_BASE_URL.rstrip("/")
 
     def _hacer_login(self, page: Page) -> None:
         """Completa el formulario de login con las credenciales de SSM."""
@@ -103,7 +103,7 @@ class SICScraper:
 
         # Esperar a que navegue fuera del login
         page.wait_for_url(
-            lambda url: "login" not in url,
+            lambda url: url.rstrip("/") != SIC_BASE_URL.rstrip("/"),
             timeout=15_000,
         )
 
@@ -111,16 +111,16 @@ class SICScraper:
         """Busca la placa y extrae el expediente de la primera fila."""
         self._buscar_placa(page, placa)
 
-        # Esperar resultados
+        # Esperar resultados y dejar que React reemplace skeletons con datos reales
         page.wait_for_selector(_SEL_RESULT_ROWS, timeout=10_000)
+        page.wait_for_timeout(2_500)
 
-        # Click en la primera fila (más reciente) → abre nueva ventana
+        # Click en la primera fila → abre el expediente en nueva pestaña
         with context.expect_page() as new_page_info:
             page.locator(_SEL_RESULT_ROWS).first.click()
-
         expediente_page = new_page_info.value
         expediente_page.wait_for_load_state("domcontentloaded")
-        expediente_page.wait_for_selector(_SEL_GALLERY_IMG, timeout=15_000)
+        expediente_page.wait_for_selector(_SEL_GALLERY_IMG, timeout=30_000, state="attached")
 
         return self._extraer_datos_expediente(expediente_page)
 
@@ -144,20 +144,27 @@ class SICScraper:
         page.press(_SEL_PLATE_INPUT, "Enter")
 
     def _extraer_datos_expediente(self, page: Page) -> dict:
-        """Extrae conteo e URLs de imágenes del expediente."""
+        """Extrae conteo e URLs de imágenes del expediente.
+
+        imagen_urls: URLs base S3 (sin firma) — referencia estable, no expira.
+        imagen_urls_signed: URLs pre-firmadas (X-Amz-Expires=604800, 7 dias) —
+            listas para pasar a Bedrock Vision (Opcion B) sin re-autenticacion.
+        """
         imgs = page.query_selector_all(_SEL_GALLERY_IMG)
 
         imagen_urls = []
+        imagen_urls_signed = []
         for img in imgs:
             src = img.get_attribute("src") or ""
-            # Limpiar query string de firma AWS para guardar solo la URL base
-            url_limpia = src.split("?")[0]
-            if url_limpia:
-                imagen_urls.append(url_limpia)
+            url_base = src.split("?")[0]
+            if url_base:
+                imagen_urls.append(url_base)
+                imagen_urls_signed.append(src)
 
         return {
             "expediente_url": page.url,
             "imagen_count": len(imagen_urls),
             "imagen_urls": imagen_urls,
+            "imagen_urls_signed": imagen_urls_signed,
             "tiene_documentos": len(imagen_urls) > 0,
         }

@@ -25,6 +25,10 @@ EXPEDIENTE_MOCK = {
         "https://inspeccionespty.s3.us-east-2.amazonaws.com/5105712/3_1775489295790.jpg",
         "https://inspeccionespty.s3.us-east-2.amazonaws.com/5105712/3_1775489295791.jpg",
     ],
+    "imagen_urls_signed": [
+        "https://inspeccionespty.s3.us-east-2.amazonaws.com/5105712/3_1775489295790.jpg?X-Amz-Expires=604800",
+        "https://inspeccionespty.s3.us-east-2.amazonaws.com/5105712/3_1775489295791.jpg?X-Amz-Expires=604800",
+    ],
     "tiene_documentos": True,
 }
 
