@@ -40,18 +40,29 @@ DEFAULT_REGION = "us-east-1"
 DEFAULT_PROFILE = "orbika-admin-panama-agent"
 
 
-def main(ssm_path: str, region: str, profile: str):
+def main(ssm_path: str, region: str, profile: str, local_path: str | None):
     print("=== Captura de sesión Salesforce ===")
-    print(f"SSM path destino: {ssm_path}")
-    print(f"Región: {region} | Perfil: {profile}")
+    if local_path:
+        print(f"Modo: LOCAL → {local_path}")
+    else:
+        print(f"Modo: SSM → {ssm_path} ({region} / {profile})")
     print()
 
     storage_state = _capturar_sesion_interactiva()
-    _guardar_en_ssm(storage_state, ssm_path, region, profile)
 
-    print()
-    print("Listo. Lambda ya puede usar esta sesión.")
-    print(f"Para verificar: python scripts/smoke_test_bandeja.py --use-ssm --ssm-path {ssm_path}")
+    if local_path:
+        _guardar_local(storage_state, local_path)
+        print()
+        print("Listo. Para usar en el smoke test:")
+        print(f"  python scripts/smoke_test_bandeja.py --storage-state {local_path}")
+        print()
+        print("Cuando SSM esté aprovisionado, sube con:")
+        print(f"  python scripts/capture_sf_session.py --from-file {local_path} --ssm-path {ssm_path}")
+    else:
+        _guardar_en_ssm(storage_state, ssm_path, region, profile)
+        print()
+        print("Listo. Lambda ya puede usar esta sesión.")
+        print(f"Para verificar: python scripts/smoke_test_bandeja.py --use-ssm --ssm-path {ssm_path}")
 
 
 def _capturar_sesion_interactiva() -> dict:
@@ -106,6 +117,20 @@ def _capturar_sesion_interactiva() -> dict:
     return storage_state
 
 
+def _guardar_local(storage_state: dict, local_path: str):
+    """Guarda el storageState en un archivo JSON local (para cuando SSM no está listo)."""
+    import os
+    os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
+    with open(local_path, "w", encoding="utf-8") as f:
+        json.dump(storage_state, f, indent=2, ensure_ascii=False)
+
+    cookies_count = len(storage_state.get("cookies", []))
+    origins = storage_state.get("origins", [])
+    ls_count = sum(len(o.get("localStorage", [])) for o in origins)
+    print(f"  Guardado en {local_path}")
+    print(f"  Contenido: {cookies_count} cookies, {ls_count} entradas de localStorage")
+
+
 def _guardar_en_ssm(storage_state: dict, ssm_path: str, region: str, profile: str):
     """Guarda el storageState en SSM Parameter Store como SecureString."""
     print(f"Guardando en SSM {ssm_path}...")
@@ -125,7 +150,7 @@ def _guardar_en_ssm(storage_state: dict, ssm_path: str, region: str, profile: st
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Captura sesion de Salesforce y guarda en SSM"
+        description="Captura sesion de Salesforce y guarda en SSM o archivo local"
     )
     parser.add_argument(
         "--ssm-path",
@@ -142,5 +167,12 @@ if __name__ == "__main__":
         default=DEFAULT_PROFILE,
         help=f"Perfil AWS CLI (default: {DEFAULT_PROFILE})",
     )
+    parser.add_argument(
+        "--local",
+        metavar="RUTA",
+        default=None,
+        help="Guardar storageState en archivo local en vez de SSM. "
+             "Util cuando SSM aun no esta aprovisionado.",
+    )
     args = parser.parse_args()
-    main(args.ssm_path, args.region, args.profile)
+    main(args.ssm_path, args.region, args.profile, args.local)
