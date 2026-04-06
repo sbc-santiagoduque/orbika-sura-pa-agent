@@ -43,9 +43,9 @@ DEFAULT_PROFILE = "orbika-admin-panama-agent"
 def main(ssm_path: str, region: str, profile: str, local_path: str | None):
     print("=== Captura de sesión Salesforce ===")
     if local_path:
-        print(f"Modo: LOCAL → {local_path}")
+        print(f"Modo: LOCAL -> {local_path}")
     else:
-        print(f"Modo: SSM → {ssm_path} ({region} / {profile})")
+        print(f"Modo: SSM -> {ssm_path} ({region} / {profile})")
     print()
 
     storage_state = _capturar_sesion_interactiva()
