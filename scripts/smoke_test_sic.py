@@ -174,6 +174,9 @@ def main(placa: str, headless: bool):
             exp.wait_for_load_state("domcontentloaded")
             print(f"   URL expediente: {exp.url}")
             exp.screenshot(path="smoke_sic_expediente_loaded.png")
+            # Navegar al tab Inspeccion — el expediente abre en el paso actual del flujo
+            exp.wait_for_selector("button[role='tab']:has-text('Inspección')", timeout=10_000)
+            exp.click("button[role='tab']:has-text('Inspección')")
             exp.wait_for_selector(_SEL_GALLERY_IMG, timeout=30_000, state="attached")
         except Exception as e:
             page.screenshot(path="smoke_sic_expediente_fail.png")

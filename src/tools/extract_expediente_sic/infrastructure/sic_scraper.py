@@ -35,8 +35,9 @@ _SEL_PLATE_INPUT = "input[placeholder='Buscar Placa Asegurado']"
 _SEL_RESULT_ROWS = "table[aria-label='simple table'] tbody tr"
 
 # Selectores del expediente
-_SEL_GALLERY_IMG = "img[src*='amazonaws']"
-_SEL_DOWNLOAD_BTN = "button.claim-button"
+_SEL_GALLERY_IMG    = "img[src*='amazonaws']"
+_SEL_INSPECCION_TAB = "button[role='tab']:has-text('Inspección')"
+_SEL_DOWNLOAD_BTN   = "button.claim-button"
 
 # Opción del select que necesitamos
 _FILTER_OPTION_TEXT = "Placa Asegurado"
@@ -120,6 +121,9 @@ class SICScraper:
             page.locator(_SEL_RESULT_ROWS).first.click()
         expediente_page = new_page_info.value
         expediente_page.wait_for_load_state("domcontentloaded")
+        # Navegar al tab Inspeccion — el expediente abre en el paso actual del flujo
+        expediente_page.wait_for_selector(_SEL_INSPECCION_TAB, timeout=10_000)
+        expediente_page.click(_SEL_INSPECCION_TAB)
         expediente_page.wait_for_selector(_SEL_GALLERY_IMG, timeout=30_000, state="attached")
 
         return self._extraer_datos_expediente(expediente_page)
