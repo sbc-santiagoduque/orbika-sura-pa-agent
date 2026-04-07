@@ -27,7 +27,7 @@ def lambda_handler(event, context):
 
 
 def _validate_env_vars():
-    required = ["SSM_ORBIKA_SESSION_PATH"]
+    required = ["SSM_ORBIKA_USERNAME_PATH", "SSM_ORBIKA_PASSWORD_PATH"]
     missing = [v for v in required if not os.environ.get(v)]
     if missing:
         raise EnvironmentError(f"Variables de entorno faltantes: {missing}")
@@ -44,7 +44,10 @@ def _process(placa: str) -> dict:
     from src.shared.orbika.orbika_session import OrbikaSession
     from src.tools.check_orbika.infrastructure.orbika_client import OrbikaClient
 
-    session = OrbikaSession(ssm_session_path=os.environ["SSM_ORBIKA_SESSION_PATH"])
+    session = OrbikaSession(
+        ssm_username_path=os.environ["SSM_ORBIKA_USERNAME_PATH"],
+        ssm_password_path=os.environ["SSM_ORBIKA_PASSWORD_PATH"],
+    )
     client = OrbikaClient(session=session)
     avisos = client.listar_avisos(placa)
 

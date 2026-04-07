@@ -2,21 +2,17 @@
 Smoke test local: valida el cliente Orbika contra el sistema real.
 
 Uso:
-    # Primero capturar sesion:
-    python scripts/capture_orbika_session.py --local
-
-    # Luego correr el smoke test:
     python scripts/smoke_test_orbika.py --placa 422644
-    python scripts/smoke_test_orbika.py --placa 422644 --session orbika_session.json
 
-Lee la sesion desde orbika_session.json (capturado con capture_orbika_session.py).
+Lee credenciales desde .env:
+    ORBIKA_USERNAME=...
+    ORBIKA_PASSWORD=...
 """
-import argparse
-import json
 import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
+import argparse
 
 
 def _load_env():
@@ -32,41 +28,41 @@ def _load_env():
 
 
 _load_env()
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.shared.orbika.orbika_session import OrbikaSession
 from src.tools.check_orbika.infrastructure.orbika_client import OrbikaClient
 
 
-def _session_desde_archivo(path: Path) -> OrbikaSession:
-    """Crea un OrbikaSession que lee desde archivo local (sin SSM)."""
-    data = json.loads(path.read_text(encoding="utf-8"))
+def _session_desde_env() -> OrbikaSession:
+    """Crea OrbikaSession con credenciales desde .env (sin SSM)."""
+    username = os.environ.get("ORBIKA_USERNAME")
+    password = os.environ.get("ORBIKA_PASSWORD")
+    if not username or not password:
+        print("FAIL: ORBIKA_USERNAME / ORBIKA_PASSWORD no en .env")
+        sys.exit(1)
 
     mock_ssm = MagicMock()
-    mock_ssm.get_parameter.return_value = {
-        "Parameter": {"Value": json.dumps(data)}
-    }
-    return OrbikaSession(ssm_session_path="/local", ssm_client=mock_ssm)
+    mock_ssm.get_parameter.side_effect = [
+        {"Parameter": {"Value": username}},
+        {"Parameter": {"Value": password}},
+    ]
+    return OrbikaSession(
+        ssm_username_path="/local/username",
+        ssm_password_path="/local/password",
+        ssm_client=mock_ssm,
+    )
 
 
-def main(placa: str, session_path: Path):
+def main(placa: str):
     print(f"=== Smoke test Orbika | placa={placa} ===")
     print()
 
-    if not session_path.exists():
-        print(f"FAIL: no se encontro sesion en {session_path}")
-        print("      Ejecutar primero: python scripts/capture_orbika_session.py --local")
-        sys.exit(1)
-
-    print(f"1. Cargando sesion desde {session_path}...")
-    session = _session_desde_archivo(session_path)
-    cookies, p_auth = session.load()
-    print(f"   Cookies: {list(cookies.keys())}")
-    print(f"   p_auth:  {p_auth[:8]}...")
-
-    print(f"\n2. Consultando Orbika para placa {placa}...")
+    print("1. Haciendo login HTTP...")
+    session = _session_desde_env()
     client = OrbikaClient(session=session)
+
+    print(f"\n2. Consultando avisos para placa {placa}...")
     try:
         avisos = client.listar_avisos(placa)
     except RuntimeError as e:
@@ -74,17 +70,13 @@ def main(placa: str, session_path: Path):
         sys.exit(1)
 
     print(f"   OK - {len(avisos)} aviso(s) encontrado(s)")
-
-    if not avisos:
-        print("   Sin avisos para esta placa.")
-    else:
-        for i, aviso in enumerate(avisos):
-            print(f"\n   [{i}] nro_aviso={aviso.get('nro_aviso')} "
-                  f"estado={aviso.get('estado')!r} "
-                  f"cobertura={aviso.get('cobertura')!r} "
-                  f"fecha={aviso.get('fecha_creacion_aviso')}")
-            print(f"       placa_asegurado={aviso.get('placa_asegurado')} "
-                  f"placa_tercero={aviso.get('placa_tercero')}")
+    for i, aviso in enumerate(avisos):
+        print(f"\n   [{i}] nro={aviso.get('nro_aviso')} "
+              f"estado={aviso.get('estado')!r} "
+              f"cobertura={aviso.get('cobertura')!r}")
+        print(f"       placa_asegurado={aviso.get('placa_asegurado')} "
+              f"placa_tercero={aviso.get('placa_tercero')} "
+              f"fecha={aviso.get('fecha_creacion_aviso')}")
 
     print()
     print("Smoke test Orbika exitoso.")
@@ -92,11 +84,6 @@ def main(placa: str, session_path: Path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--placa", required=True, help="Placa a consultar en Orbika")
-    parser.add_argument(
-        "--session",
-        default="orbika_session.json",
-        help="Archivo JSON con sesion capturada (default: orbika_session.json)",
-    )
+    parser.add_argument("--placa", required=True)
     args = parser.parse_args()
-    main(args.placa, Path(args.session))
+    main(args.placa)

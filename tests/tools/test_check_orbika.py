@@ -13,7 +13,8 @@ EVENT_BASE = {
 }
 
 ENV_VARS = {
-    "SSM_ORBIKA_SESSION_PATH": "/agente-analista/orbika/session",
+    "SSM_ORBIKA_USERNAME_PATH": "/agente-analista/orbika/username",
+    "SSM_ORBIKA_PASSWORD_PATH": "/agente-analista/orbika/password",
 }
 
 AVISO_MOCK = {
@@ -110,7 +111,8 @@ class TestCheckOrbikaHandler:
         assert "error" in body
 
     def test_error_si_faltan_env_vars(self, monkeypatch):
-        monkeypatch.delenv("SSM_ORBIKA_SESSION_PATH", raising=False)
+        monkeypatch.delenv("SSM_ORBIKA_USERNAME_PATH", raising=False)
+        monkeypatch.delenv("SSM_ORBIKA_PASSWORD_PATH", raising=False)
 
         resultado = handler_module.lambda_handler(EVENT_BASE, {})
         body = json.loads(resultado["functionResponse"]["responseBody"]["TEXT"]["body"])
@@ -119,33 +121,20 @@ class TestCheckOrbikaHandler:
 
 
 class TestOrbikaSession:
-    def test_carga_cookies_y_p_auth_desde_ssm(self):
+    def test_carga_credenciales_desde_ssm(self):
         from src.shared.orbika.orbika_session import OrbikaSession
 
         mock_ssm = MagicMock()
-        mock_ssm.get_parameter.return_value = {
-            "Parameter": {
-                "Value": json.dumps({
-                    "cookies": {"JSESSIONID": "ABC123", "ID": "XYZ"},
-                    "p_auth": "RhtmzMEj",
-                })
-            }
-        }
-        session = OrbikaSession(ssm_session_path="/test/path", ssm_client=mock_ssm)
-        cookies, p_auth = session.load()
+        mock_ssm.get_parameter.side_effect = [
+            {"Parameter": {"Value": "monicamolina"}},
+            {"Parameter": {"Value": "supersecret"}},
+        ]
+        session = OrbikaSession(
+            ssm_username_path="/test/username",
+            ssm_password_path="/test/password",
+            ssm_client=mock_ssm,
+        )
+        username, password = session.load_credentials()
 
-        assert cookies["JSESSIONID"] == "ABC123"
-        assert p_auth == "RhtmzMEj"
-
-    def test_save_persiste_cookies_y_p_auth(self):
-        from src.shared.orbika.orbika_session import OrbikaSession
-
-        mock_ssm = MagicMock()
-        session = OrbikaSession(ssm_session_path="/test/path", ssm_client=mock_ssm)
-        session.save(cookies={"JSESSIONID": "NEW123"}, p_auth="NewToken")
-
-        mock_ssm.put_parameter.assert_called_once()
-        call_kwargs = mock_ssm.put_parameter.call_args[1]
-        value = json.loads(call_kwargs["Value"])
-        assert value["cookies"]["JSESSIONID"] == "NEW123"
-        assert value["p_auth"] == "NewToken"
+        assert username == "monicamolina"
+        assert password == "supersecret"
