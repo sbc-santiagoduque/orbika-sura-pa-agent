@@ -11,10 +11,14 @@ Flujo:
 
 Ver: construccion/sic_rpa_findings.md
 """
+from __future__ import annotations
+
 import re
 import logging
+from typing import TYPE_CHECKING
 
-from playwright.sync_api import sync_playwright, Page
+if TYPE_CHECKING:
+    from playwright.sync_api import Page
 
 from src.shared.browser.sic_session import SICSession
 
@@ -69,6 +73,7 @@ class SICScraper:
               - expediente_url: str
               - tiene_documentos: bool
         """
+        from playwright.sync_api import sync_playwright  # lazy: no bloquea tests sin Playwright
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             context = self._session.get_context(browser)

@@ -17,8 +17,6 @@ Sura Panamá habilite la API de Salesforce (ADR-U2-1).
 """
 import re
 
-from playwright.sync_api import sync_playwright
-
 from src.shared.browser.session import SalesforceSession
 
 # Patrón del href de un registro Case: /lightning/r/500{id}/view
@@ -49,6 +47,7 @@ class SalesforceScraper:
         Returns:
             Lista ordenada de dicts con ``case_number`` y ``sf_record_id``.
         """
+        from playwright.sync_api import sync_playwright  # lazy: no bloquea tests sin Playwright
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             # new_context con storageState — incluye cookies + localStorage
