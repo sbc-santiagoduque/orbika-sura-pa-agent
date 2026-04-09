@@ -95,7 +95,7 @@ def lambda_handler(event, context):
         logger.error("classifier salida ERROR", extra={
             "function": function_name,
             "error":    str(exc),
-        })
+        }, exc_info=True)
         return _format_error(function_name, str(exc), action_group)
 
 
@@ -139,7 +139,7 @@ def _clasificar_todas(imagenes: list[dict]) -> list[dict]:
             logger.warning("error clasificando imagen", extra={
                 "nombre": nombre,
                 "error":  str(exc),
-            })
+            }, exc_info=True)
             clasificacion = {
                 "tipo":      "otro",
                 "confianza": "baja",
