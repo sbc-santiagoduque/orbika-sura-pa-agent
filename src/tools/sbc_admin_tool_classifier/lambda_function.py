@@ -3,10 +3,14 @@ Lambda Tool: sbc-admin-tool-classifier-lambda
 Accion: Clasificar imagenes pendientes de un caso via Bedrock Vision y persistir en DynamoDB
 
 Busca el registro del caso en DynamoDB, clasifica las imagenes que aun no tienen
-document_type usando Bedrock Vision, y guarda el resultado haciendo merge.
+document_type usando Bedrock Vision, guarda el resultado y retorna si el caso
+tiene cotizacion de reparacion entre sus documentos.
 
 Parametros de entrada (Bedrock Action Group):
     caso — numero de caso (partition key DynamoDB)
+
+Salida:
+    JSON con tiene_cotizacion (bool), razon, y totales de clasificacion.
 
 Variables de entorno requeridas:
     DYNAMO_TABLE_NAME — nombre de la tabla DynamoDB (default: sbc-admin-cases)
@@ -35,6 +39,7 @@ Clasifica la imagen en UNA de las siguientes categorias:
 - fud: Formato Unico de Denuncia (formulario policial de accidente de transito)
 - resolucion: Resolucion oficial de autoridad (MOP, ATTT, policia, etc.)
 - ruv: Registro Unico Vehicular (documento oficial de registro del vehiculo)
+- cotizacion: Cotizacion o presupuesto de reparacion del vehiculo (de taller o proveedor)
 - foto_danio: Fotografia de danios fisicos al vehiculo (abolladuras, rayones, roturas)
 - otro: cualquier otro documento o imagen
 
@@ -51,19 +56,29 @@ def lambda_handler(event, context):
         params = _extraer_parametros(event, ["caso"])
         caso   = params["caso"]
 
-        registro  = _get_registro(caso)
-        date      = registro["date"]
-        imagenes  = registro.get("imagenes", [])
-        pendientes = [img for img in imagenes if not img.get("document_type")]
+        registro         = _get_registro(caso)
+        date             = registro["date"]
+        imagenes         = registro.get("imagenes", [])
+        ya_clasificadas  = [img for img in imagenes if img.get("document_type")]
+        pendientes       = [img for img in imagenes if not img.get("document_type")]
 
         if not pendientes:
-            total = len(imagenes)
+            tiene_cotizacion = _check_cotizacion(ya_clasificadas)
             return _format_response(function_name, caso, {
-                "total": total, "clasificadas": 0, "pendientes": 0
+                "total":            len(imagenes),
+                "clasificadas":     0,
+                "pendientes":       0,
+                "tiene_cotizacion": tiene_cotizacion,
+                "razon":            _build_razon(tiene_cotizacion, ya_clasificadas, len(imagenes)),
             }, action_group)
 
-        clasificadas  = _clasificar_todas(pendientes)
-        totales       = _process(caso, date, clasificadas)
+        nuevas_clasificadas = _clasificar_todas(pendientes)
+        totales = _process(caso, date, nuevas_clasificadas)
+
+        todas_clasificadas  = ya_clasificadas + nuevas_clasificadas
+        tiene_cotizacion    = _check_cotizacion(todas_clasificadas)
+        totales["tiene_cotizacion"] = tiene_cotizacion
+        totales["razon"]            = _build_razon(tiene_cotizacion, todas_clasificadas, totales["total"])
 
         return _format_response(function_name, caso, totales, action_group)
 
@@ -83,6 +98,19 @@ def _extraer_parametros(event: dict, nombres: list[str]) -> dict:
 def _get_registro(caso: str) -> dict:
     from src.tools.sbc_admin_tool_classifier.infrastructure.dynamo_repository import ClassifierRepository
     return ClassifierRepository().get_registro_by_caso(caso)
+
+
+def _check_cotizacion(imagenes: list[dict]) -> bool:
+    """Retorna True si alguna imagen fue clasificada como cotizacion."""
+    return any(img.get("document_type") == "cotizacion" for img in imagenes)
+
+
+def _build_razon(tiene_cotizacion: bool, imagenes: list[dict], total: int) -> str:
+    """Construye la razon de la conclusion."""
+    if tiene_cotizacion:
+        n = sum(1 for img in imagenes if img.get("document_type") == "cotizacion")
+        return f"Se encontro cotizacion en {n} imagen(es) del caso"
+    return f"No se encontro cotizacion en las {total} imagenes del caso"
 
 
 def _clasificar_todas(imagenes: list[dict]) -> list[dict]:
@@ -170,11 +198,12 @@ def _format_response(function_name: str, caso: str, totales: dict, action_group:
                     "TEXT": {
                         "body": json.dumps(
                             {
-                                "status":       "ok",
-                                "caso":         caso,
-                                "total":        totales["total"],
-                                "clasificadas": totales["clasificadas"],
-                                "pendientes":   totales["pendientes"],
+                                "tiene_cotizacion": totales["tiene_cotizacion"],
+                                "razon":            totales["razon"],
+                                "caso":             caso,
+                                "total":            totales["total"],
+                                "clasificadas":     totales["clasificadas"],
+                                "pendientes":       totales["pendientes"],
                             },
                             ensure_ascii=False,
                         )
@@ -194,7 +223,10 @@ def _format_error(function_name: str, message: str, action_group: str) -> dict:
             "functionResponse": {
                 "responseBody": {
                     "TEXT": {
-                        "body": json.dumps({"error": message}, ensure_ascii=False)
+                        "body": json.dumps({
+                            "tiene_cotizacion": None,
+                            "razon":            f"error al clasificar imagenes: {message}",
+                        }, ensure_ascii=False)
                     }
                 }
             },
