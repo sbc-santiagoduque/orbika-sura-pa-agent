@@ -10,7 +10,7 @@ Parametros de entrada (Bedrock Action Group):
     caso — numero de caso (partition key DynamoDB)
 
 Salida:
-    JSON con tiene_cotizacion (bool), razon, y totales de clasificacion.
+    JSON con totales de clasificacion e imagenes clasificadas en esta ejecucion (nombre, tipo, razon).
 
 Variables de entorno requeridas:
     DYNAMO_TABLE_NAME — nombre de la tabla DynamoDB (default: sbc-admin-cases)
@@ -63,22 +63,23 @@ def lambda_handler(event, context):
         pendientes       = [img for img in imagenes if not img.get("document_type")]
 
         if not pendientes:
-            tiene_cotizacion = _check_cotizacion(ya_clasificadas)
             return _format_response(function_name, caso, {
-                "total":            len(imagenes),
-                "clasificadas":     0,
-                "pendientes":       0,
-                "tiene_cotizacion": tiene_cotizacion,
-                "razon":            _build_razon(tiene_cotizacion, ya_clasificadas, len(imagenes)),
+                "total":        len(imagenes),
+                "clasificadas": 0,
+                "pendientes":   0,
+                "imagenes":     [],
             }, action_group)
 
         nuevas_clasificadas = _clasificar_todas(pendientes)
         totales = _process(caso, date, nuevas_clasificadas)
-
-        todas_clasificadas  = ya_clasificadas + nuevas_clasificadas
-        tiene_cotizacion    = _check_cotizacion(todas_clasificadas)
-        totales["tiene_cotizacion"] = tiene_cotizacion
-        totales["razon"]            = _build_razon(tiene_cotizacion, todas_clasificadas, totales["total"])
+        totales["imagenes"] = [
+            {
+                "nombre": img.get("nombre", ""),
+                "tipo":   img.get("document_type", ""),
+                "razon":  img.get("justification", ""),
+            }
+            for img in nuevas_clasificadas
+        ]
 
         return _format_response(function_name, caso, totales, action_group)
 
@@ -98,19 +99,6 @@ def _extraer_parametros(event: dict, nombres: list[str]) -> dict:
 def _get_registro(caso: str) -> dict:
     from src.tools.sbc_admin_tool_classifier.infrastructure.dynamo_repository import ClassifierRepository
     return ClassifierRepository().get_registro_by_caso(caso)
-
-
-def _check_cotizacion(imagenes: list[dict]) -> bool:
-    """Retorna True si alguna imagen fue clasificada como cotizacion."""
-    return any(img.get("document_type") == "cotizacion" for img in imagenes)
-
-
-def _build_razon(tiene_cotizacion: bool, imagenes: list[dict], total: int) -> str:
-    """Construye la razon de la conclusion."""
-    if tiene_cotizacion:
-        n = sum(1 for img in imagenes if img.get("document_type") == "cotizacion")
-        return f"Se encontro cotizacion en {n} imagen(es) del caso"
-    return f"No se encontro cotizacion en las {total} imagenes del caso"
 
 
 def _clasificar_todas(imagenes: list[dict]) -> list[dict]:
@@ -198,12 +186,11 @@ def _format_response(function_name: str, caso: str, totales: dict, action_group:
                     "TEXT": {
                         "body": json.dumps(
                             {
-                                "tiene_cotizacion": totales["tiene_cotizacion"],
-                                "razon":            totales["razon"],
-                                "caso":             caso,
-                                "total":            totales["total"],
-                                "clasificadas":     totales["clasificadas"],
-                                "pendientes":       totales["pendientes"],
+                                "caso":         caso,
+                                "total":        totales["total"],
+                                "clasificadas": totales["clasificadas"],
+                                "pendientes":   totales["pendientes"],
+                                "imagenes":     totales["imagenes"],
                             },
                             ensure_ascii=False,
                         )
@@ -223,10 +210,7 @@ def _format_error(function_name: str, message: str, action_group: str) -> dict:
             "functionResponse": {
                 "responseBody": {
                     "TEXT": {
-                        "body": json.dumps({
-                            "tiene_cotizacion": None,
-                            "razon":            f"error al clasificar imagenes: {message}",
-                        }, ensure_ascii=False)
+                        "body": json.dumps({"error": message}, ensure_ascii=False)
                     }
                 }
             },
