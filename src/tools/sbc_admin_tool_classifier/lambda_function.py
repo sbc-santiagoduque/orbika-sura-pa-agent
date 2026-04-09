@@ -1,16 +1,12 @@
 """
 Lambda Tool: sbc-admin-tool-classifier-lambda
-Accion: Clasificar imagenes via Bedrock Vision y persistir en DynamoDB
+Accion: Clasificar imagenes pendientes de un caso via Bedrock Vision y persistir en DynamoDB
 
-Recibe el caso, la fecha y el array de imagenes (nombre, url, seccion_id),
-clasifica cada imagen con Bedrock Vision y guarda el resultado en DynamoDB
-haciendo merge con el registro existente del caso.
+Busca el registro del caso en DynamoDB, clasifica las imagenes que aun no tienen
+document_type usando Bedrock Vision, y guarda el resultado haciendo merge.
 
 Parametros de entrada (Bedrock Action Group):
-    caso     — numero de caso
-    date     — fecha apertura del caso (sort key DynamoDB, formato YYYY-MM-DD)
-    imagenes — JSON string con array de imagenes a clasificar:
-               [{nombre, url, seccion_id}, ...]
+    caso — numero de caso (partition key DynamoDB)
 
 Variables de entorno requeridas:
     DYNAMO_TABLE_NAME — nombre de la tabla DynamoDB (default: sbc-admin-cases)
@@ -20,9 +16,9 @@ Variables de entorno requeridas:
 import json
 import logging
 import os
+import urllib.request
 
 import boto3
-import urllib.request
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +48,22 @@ def lambda_handler(event, context):
     action_group  = event.get("actionGroup", _ACTION_GROUP)
 
     try:
-        params   = _extraer_parametros(event, ["caso", "date", "imagenes"])
-        caso     = params["caso"]
-        date     = params["date"]
-        imagenes = _parsear_imagenes(params["imagenes"])
+        params = _extraer_parametros(event, ["caso"])
+        caso   = params["caso"]
 
-        imagenes_clasificadas = _clasificar_todas(imagenes)
-        totales = _process(caso, date, imagenes_clasificadas)
+        registro  = _get_registro(caso)
+        date      = registro["date"]
+        imagenes  = registro.get("imagenes", [])
+        pendientes = [img for img in imagenes if not img.get("document_type")]
+
+        if not pendientes:
+            total = len(imagenes)
+            return _format_response(function_name, caso, {
+                "total": total, "clasificadas": 0, "pendientes": 0
+            }, action_group)
+
+        clasificadas  = _clasificar_todas(pendientes)
+        totales       = _process(caso, date, clasificadas)
 
         return _format_response(function_name, caso, totales, action_group)
 
@@ -75,23 +80,9 @@ def _extraer_parametros(event: dict, nombres: list[str]) -> dict:
     return {n: params[n] for n in nombres}
 
 
-def _parsear_imagenes(imagenes_raw: str) -> list[dict]:
-    """Parsea el array de imagenes desde string JSON.
-    Elimina caracteres de control que el console de AWS puede introducir."""
-    try:
-        cleaned = "".join(c for c in imagenes_raw if ord(c) >= 32 or c in "\t")
-        data    = json.loads(cleaned)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise ValueError(f"El parametro imagenes no es un JSON valido: {exc}")
-
-    if not isinstance(data, list):
-        raise ValueError("El parametro imagenes debe ser un array JSON.")
-
-    for i, img in enumerate(data):
-        if "nombre" not in img or "url" not in img:
-            raise ValueError(f"Imagen [{i}] le faltan campos requeridos: nombre, url")
-
-    return data
+def _get_registro(caso: str) -> dict:
+    from src.tools.sbc_admin_tool_classifier.infrastructure.dynamo_repository import ClassifierRepository
+    return ClassifierRepository().get_registro_by_caso(caso)
 
 
 def _clasificar_todas(imagenes: list[dict]) -> list[dict]:

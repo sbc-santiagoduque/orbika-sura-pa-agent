@@ -1,5 +1,5 @@
 """
-Repositorio DynamoDB — actualiza imagenes clasificadas por el agente.
+Repositorio DynamoDB — obtiene y actualiza imagenes clasificadas.
 
 Tabla: sbc-admin-cases
   Partition key : id   (String) — numero de caso
@@ -7,8 +7,8 @@ Tabla: sbc-admin-cases
 
 Hace merge de las imagenes clasificadas con las existentes en DynamoDB:
 - Busca cada imagen recibida por su 'nombre'
-- Actualiza solo las que llegaron con clasificacion
-- Mantiene intactas las que no fueron clasificadas en este llamado
+- Actualiza solo document_type, confidence y justification
+- Mantiene intactos nombre, url, seccion_id y demas campos
 """
 import logging
 import os
@@ -19,6 +19,8 @@ from boto3.dynamodb.conditions import Key
 
 logger = logging.getLogger(__name__)
 
+_CAMPOS_CLASIFICACION = {"document_type", "confidence", "justification"}
+
 
 class ClassifierRepository:
 
@@ -26,19 +28,39 @@ class ClassifierRepository:
         name = table_name or os.environ.get("DYNAMO_TABLE_NAME", "sbc-admin-cases")
         self._table = boto3.resource("dynamodb", region_name=region).Table(name)
 
+    def get_registro_by_caso(self, caso: str) -> dict:
+        """
+        Busca el registro mas reciente del caso usando query por partition key.
+
+        Returns:
+            El item de DynamoDB con todos sus campos (incluye 'date').
+
+        Raises:
+            ValueError: si no existe ningun registro para ese caso.
+        """
+        response = self._table.query(
+            KeyConditionExpression=Key("id").eq(caso),
+            ScanIndexForward=False,  # descendente — el mas reciente primero
+            Limit=1,
+        )
+        items = response.get("Items", [])
+        if not items:
+            raise ValueError(f"Caso '{caso}' no encontrado en DynamoDB.")
+        return items[0]
+
     def update_imagenes(self, caso: str, date: str, imagenes_clasificadas: list[dict]) -> dict:
         """
         Hace merge de las imagenes clasificadas con las existentes en DynamoDB.
 
         Por cada imagen existente en el registro:
-          - Si llego clasificada (match por 'nombre'): la actualiza con
+          - Si llego clasificada (match por 'nombre'): actualiza unicamente
             document_type, confidence y justification
           - Si no llego: la mantiene como estaba
 
         Args:
-            caso:                 numero de caso (partition key)
-            date:                 fecha apertura (sort key)
-            imagenes_clasificadas: imagenes que el agente clasifico en este llamado
+            caso:                  numero de caso (partition key)
+            date:                  fecha apertura (sort key)
+            imagenes_clasificadas: imagenes clasificadas en este llamado
 
         Returns:
             dict con totales: total, clasificadas, pendientes
@@ -47,8 +69,6 @@ class ClassifierRepository:
         imagenes_actuales = registro.get("imagenes", [])
 
         indice = {img["nombre"]: img for img in imagenes_clasificadas}
-
-        _CAMPOS_CLASIFICACION = {"document_type", "confidence", "justification"}
 
         imagenes_merged = []
         clasificadas = 0
