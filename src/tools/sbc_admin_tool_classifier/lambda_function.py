@@ -49,6 +49,12 @@ def lambda_handler(event, context):
     function_name = event.get("function", _FUNCTION_DEFAULT)
     action_group  = event.get("actionGroup", _ACTION_GROUP)
 
+    logger.info("classifier entrada", extra={
+        "function":     function_name,
+        "action_group": action_group,
+        "parameters":   event.get("parameters", []),
+    })
+
     try:
         params    = _extraer_parametros(event, ["id"])
         record_id = params["id"]
@@ -56,6 +62,12 @@ def lambda_handler(event, context):
         registro = _get_registro(record_id)
         date     = registro["date"]
         images   = registro.get("images", [])
+
+        logger.info("registro obtenido", extra={
+            "record_id":    record_id,
+            "date":         date,
+            "total_images": len(images),
+        })
 
         nuevas_clasificadas = _clasificar_todas(images)
         totales = _process(record_id, date, nuevas_clasificadas)
@@ -68,10 +80,22 @@ def lambda_handler(event, context):
             for img in nuevas_clasificadas
         ]
 
-        return _format_response(function_name, record_id, totales, action_group)
+        logger.info("classifier salida OK", extra={
+            "record_id":   record_id,
+            "total":       totales["total"],
+            "clasificadas": totales["clasificadas"],
+            "pendientes":  totales["pendientes"],
+            "imagenes":    totales["imagenes"],
+        })
+
+        response = _format_response(function_name, record_id, totales, action_group)
+        return response
 
     except Exception as exc:
-        logger.error("Error en sbc-admin-tool-classifier-lambda", extra={"error": str(exc)})
+        logger.error("classifier salida ERROR", extra={
+            "function": function_name,
+            "error":    str(exc),
+        })
         return _format_error(function_name, str(exc), action_group)
 
 
@@ -95,13 +119,27 @@ def _clasificar_todas(imagenes: list[dict]) -> list[dict]:
     bedrock  = boto3.client("bedrock-runtime", region_name=region)
 
     resultado = []
-    for img in imagenes:
+    for i, img in enumerate(imagenes):
         nombre = img.get("nombre", "")
         url    = img.get("url", "")
+        logger.info("clasificando imagen", extra={
+            "index":  i + 1,
+            "total":  len(imagenes),
+            "nombre": nombre,
+        })
         try:
             clasificacion = _clasificar_imagen(bedrock, model_id, url, nombre)
+            logger.info("imagen clasificada", extra={
+                "nombre":    nombre,
+                "tipo":      clasificacion.get("tipo"),
+                "confianza": clasificacion.get("confianza"),
+                "razon":     clasificacion.get("razon"),
+            })
         except Exception as exc:
-            logger.warning(f"No se pudo clasificar '{nombre}': {exc}")
+            logger.warning("error clasificando imagen", extra={
+                "nombre": nombre,
+                "error":  str(exc),
+            })
             clasificacion = {
                 "tipo":      "otro",
                 "confianza": "baja",
