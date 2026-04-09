@@ -34,16 +34,17 @@ _PARAMS_REQUERIDOS = ["caso", "placa", "expediente", "siniestro"]
 
 def lambda_handler(event, context):
     function_name = event.get("function", _FUNCTION_DEFAULT)
+    action_group = event.get("actionGroup", _ACTION_GROUP)
 
     try:
         _validate_env_vars()
         params = _extraer_parametros(event, _PARAMS_REQUERIDOS)
         resultado = _process(**params)
-        return _format_response(function_name, resultado)
+        return _format_response(function_name, resultado, action_group)
 
     except Exception as exc:
         logger.error("Error en sbc-admin-tool-sic-lambda", extra={"error": str(exc)})
-        return _format_error(function_name, str(exc))
+        return _format_error(function_name, str(exc), action_group)
 
 
 def _validate_env_vars():
@@ -85,29 +86,35 @@ def _process(caso: str, placa: str, expediente: str, siniestro: str) -> dict:
     }
 
 
-def _format_response(function_name: str, resultado: dict) -> dict:
+def _format_response(function_name: str, resultado: dict, action_group: str) -> dict:
     return {
-        "actionGroup": _ACTION_GROUP,
-        "function": function_name,
-        "functionResponse": {
-            "responseBody": {
-                "TEXT": {
-                    "body": json.dumps(resultado, ensure_ascii=False)
+        "messageVersion": "1.0",
+        "response": {
+            "actionGroup": action_group,
+            "function": function_name,
+            "functionResponse": {
+                "responseBody": {
+                    "TEXT": {
+                        "body": json.dumps(resultado, ensure_ascii=False)
+                    }
                 }
-            }
+            },
         },
     }
 
 
-def _format_error(function_name: str, message: str) -> dict:
+def _format_error(function_name: str, message: str, action_group: str) -> dict:
     return {
-        "actionGroup": _ACTION_GROUP,
-        "function": function_name,
-        "functionResponse": {
-            "responseBody": {
-                "TEXT": {
-                    "body": json.dumps({"error": message}, ensure_ascii=False)
+        "messageVersion": "1.0",
+        "response": {
+            "actionGroup": action_group,
+            "function": function_name,
+            "functionResponse": {
+                "responseBody": {
+                    "TEXT": {
+                        "body": json.dumps({"error": message}, ensure_ascii=False)
+                    }
                 }
-            }
+            },
         },
     }

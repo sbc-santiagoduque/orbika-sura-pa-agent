@@ -48,12 +48,15 @@ class ClassifierRepository:
 
         indice = {img["nombre"]: img for img in imagenes_clasificadas}
 
+        _CAMPOS_CLASIFICACION = {"document_type", "confidence", "justification"}
+
         imagenes_merged = []
         clasificadas = 0
         for img in imagenes_actuales:
             nombre = str(img.get("nombre", ""))
             if nombre in indice:
-                imagenes_merged.append({**img, **indice[nombre]})
+                clasificacion = {k: v for k, v in indice[nombre].items() if k in _CAMPOS_CLASIFICACION}
+                imagenes_merged.append({**img, **clasificacion})
                 clasificadas += 1
             else:
                 imagenes_merged.append(img)
