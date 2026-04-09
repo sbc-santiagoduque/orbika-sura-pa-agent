@@ -53,21 +53,11 @@ def lambda_handler(event, context):
         params    = _extraer_parametros(event, ["id"])
         record_id = params["id"]
 
-        registro        = _get_registro(record_id)
-        date            = registro["date"]
-        images          = registro.get("images", [])
-        ya_clasificadas = [img for img in images if img.get("document_type")]
-        pendientes      = [img for img in images if not img.get("document_type")]
+        registro = _get_registro(record_id)
+        date     = registro["date"]
+        images   = registro.get("images", [])
 
-        if not pendientes:
-            return _format_response(function_name, record_id, {
-                "total":        len(images),
-                "clasificadas": 0,
-                "pendientes":   0,
-                "imagenes":     [],
-            }, action_group)
-
-        nuevas_clasificadas = _clasificar_todas(pendientes)
+        nuevas_clasificadas = _clasificar_todas(images)
         totales = _process(record_id, date, nuevas_clasificadas)
         totales["imagenes"] = [
             {
@@ -161,6 +151,11 @@ def _clasificar_imagen(bedrock, model_id: str, url: str, nombre: str) -> dict:
     )
 
     texto = response["output"]["message"]["content"][0]["text"].strip()
+    # El modelo a veces devuelve el JSON envuelto en ```json ... ```
+    if texto.startswith("```"):
+        lines = texto.splitlines()
+        inner = [l for l in lines[1:] if l.strip() != "```"]
+        texto = "\n".join(inner).strip()
     try:
         return json.loads(texto)
     except json.JSONDecodeError:
