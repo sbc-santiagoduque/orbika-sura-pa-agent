@@ -21,6 +21,7 @@ import urllib.request
 
 import boto3
 
+logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 _ACTION_GROUP     = "sbc-admin-tool-actions"
