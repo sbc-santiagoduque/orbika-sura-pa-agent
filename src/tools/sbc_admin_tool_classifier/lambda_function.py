@@ -2,15 +2,12 @@
 Lambda Tool: sbc-admin-tool-classifier-lambda
 Accion: Clasificar imagenes pendientes de un caso via Bedrock Vision y persistir en DynamoDB
 
-Busca el registro del caso en DynamoDB, clasifica las imagenes que aun no tienen
-document_type usando Bedrock Vision, guarda el resultado y retorna si el caso
-tiene cotizacion de reparacion entre sus documentos.
+Busca el registro en DynamoDB por su id, clasifica las imagenes que aun no tienen
+document_type usando Bedrock Vision, guarda el resultado haciendo merge y retorna
+el listado de imagenes clasificadas en esta ejecucion.
 
 Parametros de entrada (Bedrock Action Group):
-    caso — numero de caso (partition key DynamoDB)
-
-Salida:
-    JSON con totales de clasificacion e imagenes clasificadas en esta ejecucion (nombre, tipo, razon).
+    id — identificador del registro en DynamoDB (partition key)
 
 Variables de entorno requeridas:
     DYNAMO_TABLE_NAME — nombre de la tabla DynamoDB (default: sbc-admin-cases)
@@ -53,25 +50,25 @@ def lambda_handler(event, context):
     action_group  = event.get("actionGroup", _ACTION_GROUP)
 
     try:
-        params = _extraer_parametros(event, ["caso"])
-        caso   = params["caso"]
+        params    = _extraer_parametros(event, ["id"])
+        record_id = params["id"]
 
-        registro         = _get_registro(caso)
-        date             = registro["date"]
-        imagenes         = registro.get("imagenes", [])
-        ya_clasificadas  = [img for img in imagenes if img.get("document_type")]
-        pendientes       = [img for img in imagenes if not img.get("document_type")]
+        registro        = _get_registro(record_id)
+        date            = registro["date"]
+        images          = registro.get("images", [])
+        ya_clasificadas = [img for img in images if img.get("document_type")]
+        pendientes      = [img for img in images if not img.get("document_type")]
 
         if not pendientes:
-            return _format_response(function_name, caso, {
-                "total":        len(imagenes),
+            return _format_response(function_name, record_id, {
+                "total":        len(images),
                 "clasificadas": 0,
                 "pendientes":   0,
                 "imagenes":     [],
             }, action_group)
 
         nuevas_clasificadas = _clasificar_todas(pendientes)
-        totales = _process(caso, date, nuevas_clasificadas)
+        totales = _process(record_id, date, nuevas_clasificadas)
         totales["imagenes"] = [
             {
                 "nombre": img.get("nombre", ""),
@@ -81,7 +78,7 @@ def lambda_handler(event, context):
             for img in nuevas_clasificadas
         ]
 
-        return _format_response(function_name, caso, totales, action_group)
+        return _format_response(function_name, record_id, totales, action_group)
 
     except Exception as exc:
         logger.error("Error en sbc-admin-tool-classifier-lambda", extra={"error": str(exc)})
@@ -96,9 +93,9 @@ def _extraer_parametros(event: dict, nombres: list[str]) -> dict:
     return {n: params[n] for n in nombres}
 
 
-def _get_registro(caso: str) -> dict:
+def _get_registro(record_id: str) -> dict:
     from src.tools.sbc_admin_tool_classifier.infrastructure.dynamo_repository import ClassifierRepository
-    return ClassifierRepository().get_registro_by_caso(caso)
+    return ClassifierRepository().get_registro_by_id(record_id)
 
 
 def _clasificar_todas(imagenes: list[dict]) -> list[dict]:
@@ -170,12 +167,12 @@ def _clasificar_imagen(bedrock, model_id: str, url: str, nombre: str) -> dict:
         return {"tipo": "otro", "confianza": "baja", "razon": texto[:50]}
 
 
-def _process(caso: str, date: str, imagenes: list[dict]) -> dict:
+def _process(record_id: str, date: str, imagenes: list[dict]) -> dict:
     from src.tools.sbc_admin_tool_classifier.infrastructure.dynamo_repository import ClassifierRepository
-    return ClassifierRepository().update_imagenes(caso=caso, date=date, imagenes_clasificadas=imagenes)
+    return ClassifierRepository().update_imagenes(record_id=record_id, date=date, imagenes_clasificadas=imagenes)
 
 
-def _format_response(function_name: str, caso: str, totales: dict, action_group: str) -> dict:
+def _format_response(function_name: str, record_id: str, totales: dict, action_group: str) -> dict:
     return {
         "messageVersion": "1.0",
         "response": {
@@ -186,7 +183,7 @@ def _format_response(function_name: str, caso: str, totales: dict, action_group:
                     "TEXT": {
                         "body": json.dumps(
                             {
-                                "caso":         caso,
+                                "id":           record_id,
                                 "total":        totales["total"],
                                 "clasificadas": totales["clasificadas"],
                                 "pendientes":   totales["pendientes"],

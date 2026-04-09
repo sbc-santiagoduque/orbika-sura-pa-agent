@@ -42,21 +42,21 @@ class AdminCasesRepository:
             claim       <- siniestro     (GSI)
             insurer     <- "SURA"        (GSI, fijo por ahora)
             expediente  <- expediente
-            imagenes    <- lista de {nombre, url, seccion_id}
+            images      <- lista de {nombre, url, seccion_id}
         """
         now = datetime.now(timezone.utc)
         date_value = fecha_apertura or now.strftime("%Y-%m-%d")
 
         item = {
-            "id":           caso,
-            "date":         date_value,
-            "plate":        placa,
-            "claim":        siniestro,
-            "insurer":      insurer,
-            "expediente":   expediente,
-            "imagen_count": len(imagenes),
-            "imagenes":     imagenes,
-            "updated_at":   now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "id":          caso,
+            "date":        date_value,
+            "plate":       placa,
+            "claim":       siniestro,
+            "insurer":     insurer,
+            "expediente":  expediente,
+            "image_count": len(imagenes),
+            "images":      imagenes,
+            "updated_at":  now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         self._table.put_item(Item=item)
-        logger.info("Caso guardado en DynamoDB", extra={"caso": caso, "date": date_value, "imagenes": len(imagenes)})
+        logger.info("Caso guardado en DynamoDB", extra={"caso": caso, "date": date_value, "images": len(imagenes)})
