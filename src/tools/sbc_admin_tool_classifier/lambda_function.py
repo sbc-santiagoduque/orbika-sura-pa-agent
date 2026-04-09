@@ -49,11 +49,7 @@ def lambda_handler(event, context):
     function_name = event.get("function", _FUNCTION_DEFAULT)
     action_group  = event.get("actionGroup", _ACTION_GROUP)
 
-    logger.info("classifier entrada", extra={
-        "function":     function_name,
-        "action_group": action_group,
-        "parameters":   event.get("parameters", []),
-    })
+    logger.info("classifier entrada: %s", json.dumps(event, ensure_ascii=False, default=str))
 
     try:
         params    = _extraer_parametros(event, ["id"])
@@ -80,23 +76,14 @@ def lambda_handler(event, context):
             for img in nuevas_clasificadas
         ]
 
-        logger.info("classifier salida OK", extra={
-            "record_id":   record_id,
-            "total":       totales["total"],
-            "clasificadas": totales["clasificadas"],
-            "pendientes":  totales["pendientes"],
-            "imagenes":    totales["imagenes"],
-        })
-
         response = _format_response(function_name, record_id, totales, action_group)
+        logger.info("classifier salida OK: %s", json.dumps(response, ensure_ascii=False, default=str))
         return response
 
     except Exception as exc:
-        logger.error("classifier salida ERROR", extra={
-            "function": function_name,
-            "error":    str(exc),
-        }, exc_info=True)
-        return _format_error(function_name, str(exc), action_group)
+        error_response = _format_error(function_name, str(exc), action_group)
+        logger.error("classifier salida ERROR: %s", json.dumps(error_response, ensure_ascii=False, default=str), exc_info=True)
+        return error_response
 
 
 def _extraer_parametros(event: dict, nombres: list[str]) -> dict:
