@@ -1,11 +1,17 @@
 """
-Smoke test local: valida que el scraper extrae casos del reporte de Salesforce.
+Smoke test local: valida que el scraper extrae casos del reporte de Salesforce
+con todos los campos del reporte.
 
 Uso:
     python scripts/smoke_test_bandeja.py --cookies "C:/ruta/exported-cookies.json"
 
 No requiere AWS ni SSM — usa el archivo de cookies directamente.
 Abre el browser en modo visible para que puedas ver qué está pasando.
+
+Columnas esperadas en el reporte:
+    Opened Date | Case Date/Time Last Modified | Subestados Autos | Placa |
+    Case Number | Contact Name | Account Name | Case Origin |
+    Expediente SIC | Número de reclamo en el core
 """
 import argparse
 import json
@@ -20,39 +26,158 @@ REPORT_URL = (
     "00OS6000006Sz9xMAC/view"
 )
 
-SELECTOR_CASE_LINKS = 'a[data-object-api-name="Case"]'
-RE_RECORD_ID = re.compile(r"/lightning/r/([^/]+)/view")
+# Patrón de href de un registro Case
+_RE_CASE_HREF = re.compile(r"/lightning/r/(500[A-Za-z0-9]+)/view")
+
+# Mismo mapeo que el scraper de producción
+_HEADER_TO_FIELD = {
+    "case number": "case_number",
+    "número de caso": "case_number",
+    "numero de caso": "case_number",
+    "opened date": "opened_date",
+    "fecha de apertura": "opened_date",
+    "fecha apertura": "opened_date",
+    "case date/time last modified": "last_modified",
+    "fecha hora última modificación": "last_modified",
+    "fecha hora ultima modificacion": "last_modified",
+    "última modificación": "last_modified",
+    "ultima modificacion": "last_modified",
+    "subestados autos": "subestado_autos",
+    "subestado autos": "subestado_autos",
+    "placa": "placa",
+    "contact name": "contact_name",
+    "nombre de contacto": "contact_name",
+    "account name": "account_name",
+    "nombre de cuenta": "account_name",
+    "case origin": "case_origin",
+    "origen del caso": "case_origin",
+    "expediente sic": "expediente_sic",
+    "expediente": "expediente_sic",
+    "número de reclamo en el core": "numero_reclamo_core",
+    "numero de reclamo en el core": "numero_reclamo_core",
+    "número de reclamo": "numero_reclamo_core",
+    "numero de reclamo": "numero_reclamo_core",
+}
+
+_REQUIRED_FIELDS = [
+    "case_number", "sf_record_id", "opened_date", "last_modified",
+    "subestado_autos", "placa", "contact_name", "account_name",
+    "case_origin", "expediente_sic", "numero_reclamo_core",
+]
 
 
 def convertir_cookies_para_playwright(cookies_raw: list[dict]) -> list[dict]:
-    """
-    Convierte cookies exportadas desde el browser al formato que espera Playwright.
-
-    El exportador del browser usa 'expirationDate' y session=True/False.
-    Playwright espera 'expires' como Unix timestamp (-1 = sin expiración fija).
-    """
     resultado = []
     for c in cookies_raw:
-        # sameSite: Playwright acepta "Strict", "Lax", "None"
         same_site = c.get("sameSite", "Lax")
         if same_site not in ("Strict", "Lax", "None"):
             same_site = "Lax"
-
-        playwright_cookie = {
-            "name": c["name"],
-            "value": c["value"],
-            "domain": c["domain"],
-            "path": c.get("path", "/"),
-            "expires": c.get("expirationDate") or c.get("expires") or -1,
+        resultado.append({
+            "name":     c["name"],
+            "value":    c["value"],
+            "domain":   c["domain"],
+            "path":     c.get("path", "/"),
+            "expires":  c.get("expirationDate") or c.get("expires") or -1,
             "httpOnly": c.get("httpOnly", False),
-            "secure": c.get("secure", True),
+            "secure":   c.get("secure", True),
             "sameSite": same_site,
-        }
-        resultado.append(playwright_cookie)
+        })
     return resultado
 
 
-def main(cookies_path: str, headless: bool):
+def _normalizar(texto: str) -> str:
+    if not texto:
+        return ""
+    return re.sub(r"\s+", " ", texto).strip().lower()
+
+
+def _leer_columnas(frame) -> dict[int, str]:
+    header_cells = frame.query_selector_all("thead tr th")
+    if not header_cells:
+        header_cells = frame.query_selector_all(
+            "table tr:first-child td, table tr:first-child th"
+        )
+    if not header_cells:
+        header_cells = frame.query_selector_all("[role='columnheader']")
+
+    column_map = {}
+    print(f"\n  Headers detectados ({len(header_cells)}):")
+    for idx, cell in enumerate(header_cells):
+        label = _normalizar(cell.inner_text())
+        field = _HEADER_TO_FIELD.get(label)
+        status = f"→ {field}" if field else "← sin mapeo"
+        print(f"    [{idx}] {cell.inner_text().strip()!r:50s} {status}")
+        if field:
+            column_map[idx] = field
+
+    return column_map
+
+
+def _extraer_casos_tabla(frame) -> list[dict]:
+    column_map = _leer_columnas(frame)
+
+    if not column_map:
+        print("\n  WARN: sin column_map — usando fallback por links")
+        return _extraer_casos_fallback(frame)
+
+    rows = frame.query_selector_all("tbody tr")
+    if not rows:
+        all_rows = frame.query_selector_all("[role='row']")
+        rows = [r for r in all_rows if r.query_selector("[role='gridcell']")]
+
+    print(f"\n  Filas de datos encontradas: {len(rows)}")
+
+    casos = []
+    for row in rows:
+        cells = row.query_selector_all("td, [role='gridcell']")
+        if not cells:
+            continue
+
+        caso = {field: "" for field in _REQUIRED_FIELDS}
+
+        for idx, cell in enumerate(cells):
+            field = column_map.get(idx)
+            if field:
+                caso[field] = cell.inner_text().strip()
+
+        sf_record_id = ""
+        for link in row.query_selector_all("a[href]"):
+            href = link.get_attribute("href") or ""
+            match = _RE_CASE_HREF.search(href)
+            if match:
+                sf_record_id = match.group(1)
+                if not caso.get("case_number"):
+                    caso["case_number"] = link.inner_text().strip()
+                break
+
+        if not sf_record_id:
+            continue
+
+        caso["sf_record_id"] = sf_record_id
+        casos.append(caso)
+
+    return casos
+
+
+def _extraer_casos_fallback(frame) -> list[dict]:
+    links = frame.query_selector_all("a[href]")
+    casos = []
+    for link in links:
+        href = link.get_attribute("href") or ""
+        match = _RE_CASE_HREF.search(href)
+        if not match:
+            continue
+        case_number = link.inner_text().strip()
+        if not case_number:
+            continue
+        caso = {field: "" for field in _REQUIRED_FIELDS}
+        caso["case_number"] = case_number
+        caso["sf_record_id"] = match.group(1)
+        casos.append(caso)
+    return casos
+
+
+def main(cookies_path: str, headless: bool, save_output: str | None):
     print(f"Cargando cookies desde: {cookies_path}")
     with open(cookies_path, encoding="utf-8") as f:
         cookies_raw = json.load(f)
@@ -68,87 +193,86 @@ def main(cookies_path: str, headless: bool):
 
         page = context.new_page()
         print(f"Navegando al reporte...")
-        # Salesforce Lightning nunca llega a networkidle (requests continuos en bg)
-        # Usamos "domcontentloaded" y luego esperamos el selector específico
         page.goto(REPORT_URL, wait_until="domcontentloaded", timeout=30_000)
 
-        # Verificar si llegamos al login (cookies inválidas)
         if "login" in page.url.lower():
-            print("\nFAIL: las cookies no son validas - Salesforce redirigió al login.")
-            print("  Exporta las cookies con el browser abierto y sesion activa.")
+            print("\nFAIL: las cookies no son válidas — Salesforce redirigió al login.")
+            print("  Exporta las cookies con el browser abierto y sesión activa.")
             browser.close()
             sys.exit(1)
 
         print(f"URL actual: {page.url}")
         print("Esperando que cargue el grid del reporte...")
 
-        # Esperar a que aparezca CUALQUIER link a un registro de Salesforce
-        # (href con patrón /lightning/r/{id}/view) — más robusto que data-object-api-name
-        # Salesforce Analytics carga el grid dentro de un iframe
-        # Esperar a que el iframe con el reporte aparezca
-        # El reporte carga dentro del iframe lightningReportApp.app
-        # Esperar a que el iframe con el reporte esté disponible
         report_frame = None
-        for _ in range(10):
-            page.wait_for_timeout(3000)
+        for attempt in range(10):
+            page.wait_for_timeout(3_000)
             for f in page.frames:
                 if "lightningReportApp" in f.url or "reportId" in f.url:
-                    report_frame = f
-                    break
+                    links = f.query_selector_all("a[href]")
+                    case_links = [
+                        l for l in links
+                        if _RE_CASE_HREF.search(l.get_attribute("href") or "")
+                    ]
+                    if case_links:
+                        report_frame = f
+                        print(f"  Frame listo (intento {attempt + 1}): {f.url[:80]}")
+                        break
             if report_frame:
                 break
+            print(f"  Intento {attempt + 1}/10 — esperando casos en frame...")
 
         if not report_frame:
             print("\nFAIL: iframe del reporte no encontrado.")
-            browser.close()
-            sys.exit(1)
-
-        print(f"  Frame del reporte: {report_frame.url[:80]}")
-
-        # Esperar hasta 30s a que aparezcan links en el frame
-        found = False
-        for _ in range(10):
-            all_links = report_frame.query_selector_all("a[href]")
-            # Los IDs de Case en Salesforce empiezan con "500"
-            # Filtramos explícitamente para no incluir links a Contact (003), Account (001), Owner (00G)
-            case_links = [l for l in all_links if re.search(r"/lightning/r/500[A-Za-z0-9]+/view", l.get_attribute("href") or "")]
-            print(f"  Links en frame: {len(all_links)} total, {len(case_links)} de casos")
-            if case_links:
-                found = True
-                break
-            # Mostrar sample de links para diagnóstico
-            for l in all_links[:3]:
-                print(f"    href={l.get_attribute('href')} text={l.inner_text()[:30]!r}")
-            page.wait_for_timeout(3000)
-
-        if not found:
-            print("\nFAIL: links de casos no aparecieron en el frame.")
             page.screenshot(path="smoke_test_screenshot.png")
             browser.close()
             sys.exit(1)
 
-        links = case_links
-        casos = []
-        for link in links:
-            case_number = link.inner_text().strip()
-            href = link.get_attribute("href") or ""
-            match = RE_RECORD_ID.search(href)
-            if case_number and match:
-                casos.append({
-                    "case_number": case_number,
-                    "sf_record_id": match.group(1),
-                })
-
+        casos = _extraer_casos_tabla(report_frame)
         browser.close()
 
     if not casos:
-        print("\nWARN: el selector funciono pero no se encontraron casos.")
-        print("  Puede que el reporte este vacio o el selector necesite ajuste.")
+        print("\nWARN: el selector funcionó pero no se encontraron casos.")
+        print("  Puede que el reporte esté vacío o los selectores necesiten ajuste.")
         sys.exit(1)
 
-    print(f"\nOK: {len(casos)} casos extraidos:")
-    for caso in casos:
-        print(f"  #{caso['case_number']}  ->  {caso['sf_record_id']}")
+    # ──────────────────────────────────────────────────────────────────
+    # Mostrar resultados
+    # ──────────────────────────────────────────────────────────────────
+    print(f"\n{'═' * 60}")
+    print(f"OK: {len(casos)} casos extraídos")
+    print(f"{'═' * 60}")
+
+    for i, caso in enumerate(casos, 1):
+        print(f"\n  Caso {i}:")
+        print(f"    case_number        : {caso['case_number']}")
+        print(f"    sf_record_id       : {caso['sf_record_id']}")
+        print(f"    opened_date        : {caso['opened_date']}")
+        print(f"    last_modified      : {caso['last_modified']}")
+        print(f"    subestado_autos    : {caso['subestado_autos']}")
+        print(f"    placa              : {caso['placa']}")
+        print(f"    contact_name       : {caso['contact_name']}")
+        print(f"    account_name       : {caso['account_name']}")
+        print(f"    case_origin        : {caso['case_origin']}")
+        print(f"    expediente_sic     : {caso['expediente_sic']}")
+        print(f"    numero_reclamo_core: {caso['numero_reclamo_core']}")
+
+    # Verificar campos vacíos sospechosos
+    print(f"\n{'─' * 60}")
+    print("Cobertura de campos (% casos con valor):")
+    for field in _REQUIRED_FIELDS:
+        con_valor = sum(1 for c in casos if c.get(field))
+        pct = con_valor / len(casos) * 100
+        status = "OK" if pct > 0 else "WARN — sin datos"
+        print(f"  {field:30s}: {pct:5.0f}%  {status}")
+
+    if save_output:
+        out = Path(save_output)
+        out.write_text(
+            json.dumps({"casos": casos, "total": len(casos)}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"\nSalida guardada en: {out.resolve()}")
 
     print("\nSmoke test exitoso.")
 
@@ -166,5 +290,10 @@ if __name__ == "__main__":
         default=False,
         help="Correr sin browser visible (por defecto: visible)",
     )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Ruta donde guardar el JSON con los casos extraídos",
+    )
     args = parser.parse_args()
-    main(args.cookies, args.headless)
+    main(args.cookies, args.headless, args.output)
