@@ -42,7 +42,7 @@ src/
 │   ├── observability/       # U6 — logging y métricas del piloto ✅
 │   │   ├── logger.py        # log_decision() + log_tool() → CloudWatch JSON
 │   │   └── resultado_caso.py # ResultadoCasoRepository → DynamoDB
-│   └── state_store/         # U1 — helpers DynamoDB EstadoFlujo 🔄 en progreso
+│   └── state_store/         # U1 — helpers DynamoDB EstadoFlujo ✅
 └── tools/                   # Lambda tools (Action Groups de Bedrock)
     ├── get_bandeja_crm/     # U2 — F1: bandeja Salesforce
     ├── review_historial_crm/ # U2 — F2: historial + criterio Panamá
@@ -66,7 +66,7 @@ tests/
 |------|-------------|--------|
 | U6 Observabilidad | `logger.py` + `ResultadoCasoRepository` | ✅ Completo — 100% coverage |
 | U1 State Store | `EstadoFlujoRepository` — get, create, update_fase, close | ✅ Completo — 100% coverage |
-| U2 Agente Ingesta | F1 bandeja CRM + F2 historial | 🔄 F1 completo — F2 pendiente |
+| U2 Agente Ingesta | F1 bandeja CRM + F2 historial | ✅ Completo — F1 100% · F2 87% scraper (Playwright excluido) |
 | U3 Agente Expediente | F6 SIC + F7 existencia docs | 🔄 F6 completo — F7 pendiente |
 | U4 Agente Orbika | F8 Orbika + F9 responsabilidad | ⏳ Pendiente |
 | U5 Agente Cierre | F13 nota CRM + estado | ⏳ Pendiente |

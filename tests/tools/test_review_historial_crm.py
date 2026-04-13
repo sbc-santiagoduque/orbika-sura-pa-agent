@@ -221,6 +221,136 @@ class TestSalesforceCaseScraperExtraccion:
         assert result is not None
         assert len(result["texto"]) <= 500
 
+    # ------------------------------------------------------------------
+    # _esperar_caso_cargado
+    # ------------------------------------------------------------------
+
+    def test_esperar_caso_cargado_emite_warning_si_no_hay_header(self, caplog):
+        import logging
+        scraper = self._make_scraper()
+        page = MagicMock()
+        page.query_selector.return_value = None
+        page.query_selector_all.return_value = []
+
+        with caplog.at_level(logging.WARNING):
+            scraper._esperar_caso_cargado(page)
+
+        mensajes = [r.message for r in caplog.records]
+        assert any("header" in m.lower() or "polling" in m.lower() for m in mensajes)
+
+    def test_esperar_caso_cargado_retorna_si_encuentra_header(self):
+        scraper = self._make_scraper()
+        page = MagicMock()
+        header_mock = MagicMock()
+        header_mock.inner_text.return_value = "00001234"
+        page.query_selector.return_value = header_mock
+        page.query_selector_all.return_value = []
+
+        scraper._esperar_caso_cargado(page)
+        assert page.wait_for_timeout.call_count == 1
+
+    # ------------------------------------------------------------------
+    # _extraer_campos — ramas continue y elif faltantes
+    # ------------------------------------------------------------------
+
+    def test_extraer_campos_salta_items_sin_label_o_value(self):
+        scraper = self._make_scraper()
+        page = MagicMock()
+        item_sin_elementos = MagicMock()
+        item_sin_elementos.query_selector.return_value = None
+        page.query_selector_all.side_effect = lambda sel: (
+            [] if sel == "h1" else [item_sin_elementos]
+        )
+
+        campos = scraper._extraer_campos(page)
+        assert campos["status"] == ""
+        assert campos["account_name"] == ""
+
+    def test_extraer_campos_salta_items_con_value_vacio(self):
+        scraper = self._make_scraper()
+        page = MagicMock()
+        page.query_selector_all.side_effect = lambda sel: (
+            [] if sel == "h1" else [_make_layout_item("Status", "")]
+        )
+
+        campos = scraper._extraer_campos(page)
+        assert campos["status"] == ""
+
+    def test_extraer_campos_identifica_account_name(self):
+        scraper = self._make_scraper()
+        page = MagicMock()
+        page.query_selector_all.side_effect = lambda sel: (
+            [] if sel == "h1" else [_make_layout_item("Account Name", "Juan Perez")]
+        )
+
+        campos = scraper._extraer_campos(page)
+        assert campos["account_name"] == "Juan Perez"
+
+    def test_extraer_campos_identifica_created_date(self):
+        scraper = self._make_scraper()
+        page = MagicMock()
+        page.query_selector_all.side_effect = lambda sel: (
+            [] if sel == "h1" else [_make_layout_item("Created Date", "4/1/2026")]
+        )
+
+        campos = scraper._extraer_campos(page)
+        assert campos["created_date"] == "4/1/2026"
+
+    # ------------------------------------------------------------------
+    # _extraer_comentarios — fallback con elementos
+    # ------------------------------------------------------------------
+
+    def test_extraer_comentarios_usa_fallback_cuando_timeline_vacio_con_contenido(self):
+        scraper = self._make_scraper()
+        page = MagicMock()
+        fallback_el = MagicMock()
+        fallback_el.inner_text.return_value = "Comentario de fallback encontrado."
+        llamadas = [0]
+
+        def _side_effect(sel):
+            llamadas[0] += 1
+            if llamadas[0] == 1:
+                return []
+            return [fallback_el]
+
+        page.query_selector_all.side_effect = _side_effect
+
+        comentarios = scraper._extraer_comentarios(page)
+        assert len(comentarios) == 1
+        assert comentarios[0]["texto"] == "Comentario de fallback encontrado."
+        assert comentarios[0]["fecha"] == ""
+        assert comentarios[0]["autor"] == ""
+
+    def test_extraer_comentarios_ignora_fallback_con_texto_vacio(self):
+        scraper = self._make_scraper()
+        page = MagicMock()
+        fallback_el = MagicMock()
+        fallback_el.inner_text.return_value = ""
+        llamadas = [0]
+
+        def _side_effect(sel):
+            llamadas[0] += 1
+            if llamadas[0] == 1:
+                return []
+            return [fallback_el]
+
+        page.query_selector_all.side_effect = _side_effect
+
+        comentarios = scraper._extraer_comentarios(page)
+        assert comentarios == []
+
+    # ------------------------------------------------------------------
+    # _parsear_item_timeline — excepción interna
+    # ------------------------------------------------------------------
+
+    def test_parsear_item_retorna_none_si_excepcion_interna(self):
+        scraper = self._make_scraper()
+        item = MagicMock()
+        item.query_selector.side_effect = RuntimeError("Error inesperado de Playwright")
+
+        result = scraper._parsear_item_timeline(item)
+        assert result is None
+
 
 # ------------------------------------------------------------------
 # Factories de mocks de Playwright para tests de extracción
