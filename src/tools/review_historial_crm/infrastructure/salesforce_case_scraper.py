@@ -7,11 +7,17 @@ Flujo:
   2. Navega a /lightning/r/Case/{sf_record_id}/view
   3. Extrae: estado, asunto, fecha y comentarios del activity timeline
 
+Re-login automático:
+- Si la sesión expiró Playwright termina en la página de login (#username visible)
+- Se invoca refresh_login() via orbika-login (async, incluye SMS/Telegram si está configurado)
+- El nuevo storageState queda en SSM y se reintenta la navegación
+
 Nota: Los selectores requieren validación con smoke test contra el org real.
       Ver scripts/smoke_test_review_historial_crm.py
 """
 import logging
 import re
+from typing import Any
 
 from src.shared.browser.session import SalesforceSession
 
@@ -19,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # Prefijo URL del org de Sura Panamá
 _SF_BASE_URL = "https://surapa.lightning.force.com"
+
+# Selector que identifica la página de login de Salesforce
+_SEL_LOGIN = "#username"
 
 # Tiempo máximo de espera para que el detalle del caso renderice
 _PAGE_TIMEOUT_MS = 30_000
@@ -38,12 +47,26 @@ class SalesforceCaseScraper:
     Navega a un caso de Salesforce y extrae su metadata y comentarios.
     """
 
-    def __init__(self, ssm_cookies_path: str):
+    def __init__(
+        self,
+        ssm_cookies_path: str,
+        ssm_username_path: str | None = None,
+        ssm_password_path: str | None = None,
+        sf_login_url: str | None = None,
+        telegram_bot: Any | None = None,
+    ):
         self._session = SalesforceSession(ssm_path=ssm_cookies_path)
+        self._ssm_username_path = ssm_username_path
+        self._ssm_password_path = ssm_password_path
+        self._sf_login_url = sf_login_url
+        self._telegram_bot = telegram_bot
 
     def obtener_historial(self, sf_record_id: str) -> dict:
         """
         Navega al caso y retorna su historial.
+
+        Si detecta que la sesión expiró, ejecuta re-login automático via
+        orbika-login y reintenta la navegación.
 
         Args:
             sf_record_id: ID de registro Salesforce (ej. "500xxxxxxxxxxxx").
@@ -51,15 +74,15 @@ class SalesforceCaseScraper:
         Returns:
             {
                 "sf_record_id": str,
-                "case_number":  str,       # número visible (ej. "00001234")
-                "status":       str,       # estado actual del caso
+                "case_number":  str,
+                "status":       str,
                 "subject":      str,
                 "account_name": str,
                 "created_date": str,
                 "comments":     [{"fecha": str, "autor": str, "texto": str}, ...]
             }
         """
-        from playwright.sync_api import sync_playwright  # lazy: no bloquea tests sin Playwright
+        from playwright.sync_api import sync_playwright
 
         url = f"{_SF_BASE_URL}/lightning/r/Case/{sf_record_id}/view"
         logger.info("Navegando a caso Salesforce", extra={"url": url, "sf_record_id": sf_record_id})
@@ -70,6 +93,15 @@ class SalesforceCaseScraper:
             page = context.new_page()
 
             page.goto(url, wait_until="domcontentloaded")
+
+            if self._es_pagina_login(page):
+                logger.info("Sesion Salesforce expirada — ejecutando re-login automatico")
+                context.close()
+                self._refresh_login()
+                context = self._session.inject_storage_state(browser)
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded")
+
             self._esperar_caso_cargado(page)
 
             resultado = {
@@ -89,6 +121,22 @@ class SalesforceCaseScraper:
             },
         )
         return resultado
+
+    def _es_pagina_login(self, page) -> bool:
+        return page.locator(_SEL_LOGIN).count() > 0
+
+    def _refresh_login(self) -> None:
+        if not all([self._ssm_username_path, self._ssm_password_path, self._sf_login_url]):
+            raise RuntimeError(
+                "Sesion Salesforce expirada y no hay credenciales configuradas para re-login. "
+                "Configura SSM_SF_USERNAME_PATH, SSM_SF_PASSWORD_PATH y SF_LOGIN_URL."
+            )
+        self._session.refresh_login(
+            sf_url=self._sf_login_url,
+            ssm_username_path=self._ssm_username_path,
+            ssm_password_path=self._ssm_password_path,
+            telegram_bot=self._telegram_bot,
+        )
 
     # ------------------------------------------------------------------
     # Internos

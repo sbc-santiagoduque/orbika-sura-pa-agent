@@ -1,6 +1,11 @@
+import asyncio
 import json
-import boto3
+import logging
 from typing import Any
+
+import boto3
+
+logger = logging.getLogger(__name__)
 
 
 class SalesforceSession:
@@ -14,6 +19,9 @@ class SalesforceSession:
     storageState completo (cookies + localStorage) se serializa en SSM SecureString.
     Cada Lambda lo carga al iniciar e inicializa el contexto de Playwright con él.
 
+    Cuando la sesión expira, refresh_login() ejecuta un login fresco via orbika-login
+    (incluyendo verificación SMS si Salesforce lo requiere) y actualiza SSM.
+
     Por qué storageState y no solo cookies:
         Salesforce Lightning guarda el token de "dispositivo confiable" en localStorage,
         no en cookies. Sin él, cada browser nuevo pide 2FA aunque las cookies sean válidas.
@@ -23,9 +31,9 @@ class SalesforceSession:
     queda obsoleta y se reemplaza por un cliente REST directo.
     """
 
-    def __init__(self, ssm_path: str, region: str = "us-east-1"):
+    def __init__(self, ssm_path: str, region: str = "us-east-1", ssm_client=None):
         self._ssm_path = ssm_path
-        self._ssm = boto3.client("ssm", region_name=region)
+        self._ssm = ssm_client or boto3.client("ssm", region_name=region)
 
     def load_storage_state(self) -> dict:
         """
@@ -52,12 +60,7 @@ class SalesforceSession:
             )
 
     def save_storage_state(self, storage_state: dict) -> None:
-        """
-        Persiste el storageState actualizado en SSM.
-
-        Llamar después de cada navegación exitosa para que Salesforce pueda
-        renovar cookies de sesión sin invalidar el estado guardado.
-        """
+        """Persiste el storageState actualizado en SSM."""
         self._ssm.put_parameter(
             Name=self._ssm_path,
             Value=json.dumps(storage_state),
@@ -69,15 +72,51 @@ class SalesforceSession:
         """
         Crea y retorna un contexto de Playwright inicializado con el storageState.
 
-        Usar en lugar de browser.new_context() para obtener un contexto
-        ya autenticado. El storageState incluye cookies Y localStorage,
+        El storageState incluye cookies Y localStorage (token de dispositivo confiable),
         por lo que Salesforce no pedirá 2FA.
-
-        Args:
-            playwright_browser: instancia de Browser de Playwright
-
-        Returns:
-            BrowserContext listo para navegar a Salesforce sin login.
         """
         storage_state = self.load_storage_state()
         return playwright_browser.new_context(storage_state=storage_state)
+
+    def refresh_login(
+        self,
+        sf_url: str,
+        ssm_username_path: str,
+        ssm_password_path: str,
+        telegram_bot=None,
+    ) -> None:
+        """
+        Ejecuta un login fresco en Salesforce via orbika-login y actualiza SSM.
+
+        Llama al flujo completo (restore → login → SMS si aplica) usando async
+        Playwright internamente. Al terminar, SSM tiene el nuevo storageState y
+        inject_storage_state() funcionará con la sesión renovada.
+
+        Args:
+            sf_url:             URL de Salesforce — puede ser login o la app directamente.
+            ssm_username_path:  Path SSM del usuario de Salesforce.
+            ssm_password_path:  Path SSM de la contraseña de Salesforce.
+            telegram_bot:       Bot de Telegram para recibir el código SMS (opcional).
+                                Si es None y Salesforce pide SMS, el login fallará por timeout.
+        """
+        from login import SalesforceAuth
+        from src.shared.browser.ssm_storage import SSMStorageBackend
+
+        username = self._ssm.get_parameter(
+            Name=ssm_username_path, WithDecryption=True,
+        )["Parameter"]["Value"]
+        password = self._ssm.get_parameter(
+            Name=ssm_password_path, WithDecryption=True,
+        )["Parameter"]["Value"]
+
+        storage = SSMStorageBackend(ssm_path=self._ssm_path, ssm_client=self._ssm)
+        auth = SalesforceAuth(url=sf_url, storage=storage, telegram_bot=telegram_bot)
+
+        async def _run():
+            try:
+                await auth.login(user=username, password=password)
+            finally:
+                await auth.close()
+
+        asyncio.run(_run())
+        logger.info("Re-login Salesforce completado — estado actualizado en SSM '%s'", self._ssm_path)
