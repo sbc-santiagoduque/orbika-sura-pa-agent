@@ -46,7 +46,8 @@ src/
 └── tools/                   # Lambda tools (Action Groups de Bedrock)
     ├── get_bandeja_crm/     # U2 — F1: bandeja Salesforce
     ├── review_historial_crm/ # U2 — F2: historial + criterio Panamá
-    ├── extract_expediente_sic/ # U3 — F6: extracción SIC
+    ├── extract_expediente_sic/ # U3 — F6-SIC: extracción SIC
+    ├── extract_expediente_crm/ # U3 — F6-CRM: adjuntos desde Salesforce CRM
     ├── validate_documentos/ # U3 — F7: existencia de documentos
     ├── check_orbika/        # U4 — F8: estado aviso Orbika
     ├── validate_responsabilidad/ # U4 — F9: clasificación responsabilidad
@@ -67,7 +68,7 @@ tests/
 | U6 Observabilidad | `logger.py` + `ResultadoCasoRepository` | ✅ Completo — 100% coverage |
 | U1 State Store | `EstadoFlujoRepository` — get, create, update_fase, close | ✅ Completo — 100% coverage |
 | U2 Agente Ingesta | F1 bandeja CRM + F2 historial | ✅ Completo — F1 100% · F2 87% scraper (Playwright excluido) |
-| U3 Agente Expediente | F6 SIC + F7 existencia docs | 🔄 F6 completo — F7 pendiente |
+| U3 Agente Expediente | F6-SIC + F6-CRM + F7 existencia docs | ✅ F6-SIC completo · F6-CRM completo (100% handler, 72% scraper) · F7 pendiente |
 | U4 Agente Orbika | F8 Orbika + F9 responsabilidad | ⏳ Pendiente |
 | U5 Agente Cierre | F13 nota CRM + estado | ⏳ Pendiente |
 
@@ -89,6 +90,7 @@ Ver `src/tools/<nombre>/config/` para los valores por ambiente.
 | `SSM_SIC_STATE_PATH` | Path SSM con storageState de sesión SIC | U3 extract_expediente_sic |
 | `SSM_SIC_USERNAME_PATH` | Path SSM con usuario SIC | U3 extract_expediente_sic |
 | `SSM_SIC_PASSWORD_PATH` | Path SSM con contraseña SIC | U3 extract_expediente_sic |
+| `SSM_SF_COOKIES_PATH` | Path SSM con storageState de sesión Salesforce | U3 extract_expediente_crm (también U2) |
 
 ---
 
