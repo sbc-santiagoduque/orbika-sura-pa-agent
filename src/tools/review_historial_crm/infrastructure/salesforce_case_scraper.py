@@ -61,15 +61,13 @@ class SalesforceCaseScraper:
         self._sf_login_url = sf_login_url
         self._telegram_bot = telegram_bot
 
-    def obtener_historial(self, sf_record_id: str) -> dict:
+    def obtener_historial(self, case_number: str) -> dict:
         """
-        Navega al caso y retorna su historial.
-
-        Si detecta que la sesión expiró, ejecuta re-login automático via
-        orbika-login y reintenta la navegación.
+        Resuelve case_number → sf_record_id, navega al caso y retorna su historial.
 
         Args:
-            sf_record_id: ID de registro Salesforce (ej. "500xxxxxxxxxxxx").
+            case_number: Número de caso visible (ej. "CF0975"). El sf_record_id
+                         se resuelve internamente vía búsqueda global de Salesforce.
 
         Returns:
             {
@@ -83,16 +81,17 @@ class SalesforceCaseScraper:
             }
         """
         from playwright.sync_api import sync_playwright
+        from src.shared.browser.salesforce_case_resolver import resolve_sf_record_id
 
-        url = f"{_SF_BASE_URL}/lightning/r/Case/{sf_record_id}/view"
-        logger.info("Navegando a caso Salesforce", extra={"url": url, "sf_record_id": sf_record_id})
+        logger.info(
+            "Extrayendo historial CRM para case_number=%s", case_number,
+            extra={"case_number": case_number},
+        )
 
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             context = self._session.inject_storage_state(browser)
             page = context.new_page()
-
-            page.goto(url, wait_until="domcontentloaded")
 
             if self._es_pagina_login(page):
                 logger.info("Sesion Salesforce expirada — ejecutando re-login automatico")
@@ -100,7 +99,16 @@ class SalesforceCaseScraper:
                 self._refresh_login()
                 context = self._session.inject_storage_state(browser)
                 page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded")
+
+            # Resolver case_number → sf_record_id via búsqueda global
+            sf_record_id = resolve_sf_record_id(page, case_number)
+
+            url = f"{_SF_BASE_URL}/lightning/r/Case/{sf_record_id}/view"
+            logger.info(
+                "Navegando a caso Salesforce",
+                extra={"url": url, "sf_record_id": sf_record_id},
+            )
+            page.goto(url, wait_until="domcontentloaded")
 
             self._esperar_caso_cargado(page)
 

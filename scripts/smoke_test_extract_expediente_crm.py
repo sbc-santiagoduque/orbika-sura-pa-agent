@@ -32,6 +32,9 @@ import re
 import sys
 from pathlib import Path
 
+# Agregar el root del proyecto al path para imports de src.*
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from playwright.sync_api import sync_playwright
 
 _SF_BASE_URL = "https://surapa.lightning.force.com"
@@ -147,6 +150,38 @@ def _esperar_tabla(page, max_intentos: int = 10) -> bool:
     return False
 
 
+def _esperar_filas(page, max_intentos: int = 8) -> int:
+    """
+    Espera específicamente a que las filas (tbody tr) aparezcan.
+    Salesforce Lightning renderiza thead antes que tbody — necesita polling extra.
+    Retorna la cantidad de filas encontradas (0 si no aparecen).
+    """
+    sel_filas = "table.uiVirtualDataTable tbody tr, table[role='grid'] tbody tr"
+    for intento in range(max_intentos):
+        count = len(page.query_selector_all(sel_filas))
+        if count > 0:
+            print(f"   OK - {count} fila(s) encontrada(s) (intento {intento + 1})")
+            return count
+        print(f"   Intento {intento + 1}/{max_intentos} — esperando filas del tbody...")
+        page.wait_for_timeout(2_000)
+    return 0
+
+
+def _dump_tabla_html(page):
+    """Imprime el HTML del primer tbody de la tabla para diagnosticar selectores."""
+    print("\n  ── DUMP HTML tabla ─────────────────────────────────────")
+    tbody = page.query_selector("table.uiVirtualDataTable tbody, table[role='grid'] tbody")
+    if tbody:
+        html = tbody.inner_html()
+        # Limitar a 3000 caracteres para legibilidad
+        print(f"  [tbody innerHTML, primeros 3000 chars]\n{html[:3000]}")
+    else:
+        print("  tbody no encontrado. HTML del body completo (primeros 2000 chars):")
+        html = page.inner_html("body")
+        print(html[:2000])
+    print("  ──────────────────────────────────────────────────────────")
+
+
 def _parsear_fila(row) -> dict | None:
     """Extrae campos de una fila — misma logica que el scraper de produccion."""
     title_link = row.query_selector("th[scope='row'] a")
@@ -207,45 +242,69 @@ def _verificar_selectores_por_fila(row, idx: int):
             print(f"      ⚠   {desc:40s} → NO ENCONTRADO")
 
 
-def main(record_id: str, cookies_path: str, headless: bool, debug: bool, save_output: str | None):
-    print(f"=== Smoke test extract_expediente_crm | record_id={record_id} ===")
-    print(f"Cargando cookies desde: {cookies_path}")
+def main(record_id: str | None, case_number: str | None, cookies_path: str, storage_state_path: str | None, headless: bool, debug: bool, pause: bool, save_output: str | None):
+    label = f"record_id={record_id}" if record_id else f"case_number={case_number}"
+    print(f"=== Smoke test extract_expediente_crm | {label} ===")
 
-    with open(cookies_path, encoding="utf-8") as f:
-        cookies_raw = json.load(f)
+    cookies = []
+    if storage_state_path:
+        print(f"Usando storageState (cookies + localStorage): {storage_state_path}")
+    else:
+        print(f"Cargando cookies desde: {cookies_path}")
+        with open(cookies_path, encoding="utf-8") as f:
+            cookies_raw = json.load(f)
+        cookies = convertir_cookies_para_playwright(cookies_raw)
+        print(f"  {len(cookies)} cookies cargadas")
+        print("  AVISO: el plugin de export solo da cookies HTTP, sin localStorage.")
+        print("  Si Salesforce redirige al login, usar --storage-state con capture_sf_session.py --local")
 
-    cookies = convertir_cookies_para_playwright(cookies_raw)
-    print(f"  {len(cookies)} cookies cargadas")
-
-    url = f"{_SF_BASE_URL}/lightning/r/Case/{record_id}/related/CombinedAttachments/view"
     print(f"\nAbriendo browser (headless={headless})...")
-    print(f"URL destino: {url}")
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=headless)
-        context = browser.new_context()
-        context.add_cookies(cookies)
+
+        # storageState incluye cookies + localStorage (token de dispositivo confiable)
+        # El plugin de export del browser solo da cookies HTTP — sin localStorage
+        # Salesforce pide 2FA en cualquier browser nuevo sin ese token
+        if storage_state_path:
+            with open(storage_state_path, encoding="utf-8") as f:
+                state = json.load(f)
+            context = browser.new_context(storage_state=state)
+        else:
+            context = browser.new_context()
+            context.add_cookies(cookies)
 
         page = context.new_page()
 
-        # ── 1. Navegar ──────────────────────────────────────────────────
-        print("\n1. Navegando a CombinedAttachments...")
+        # ── 1. Resolver case_number → sf_record_id si es necesario ──────
+        if case_number and not record_id:
+            print(f"\n1. Resolviendo case_number={case_number!r} → sf_record_id...")
+            from src.shared.browser.salesforce_case_resolver import resolve_sf_record_id
+            try:
+                record_id = resolve_sf_record_id(page, case_number)
+                print(f"   OK — sf_record_id={record_id}")
+            except RuntimeError as e:
+                print(f"\nFAIL al resolver case_number: {e}")
+                if pause:
+                    input("\n[PAUSE] Browser abierto para inspección. Presiona Enter para cerrar...")
+                browser.close()
+                sys.exit(1)
+        else:
+            print(f"\n1. Usando sf_record_id directo: {record_id}")
+
+        # ── 2. Navegar a CombinedAttachments ────────────────────────────
+        url = f"{_SF_BASE_URL}/lightning/r/Case/{record_id}/related/CombinedAttachments/view"
+        print(f"\n2. Navegando a CombinedAttachments...")
+        print(f"   URL destino: {url}")
         page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-
-        if page.locator(_SEL_LOGIN).count() > 0:
-            print("\nFAIL: las cookies no son válidas — Salesforce redirigió al login.")
-            print("  Exporta las cookies con el browser abierto y sesion activa.")
-            browser.close()
-            sys.exit(1)
-
         print(f"   URL actual: {page.url}")
 
         if debug:
             print("\n  [DEBUG inmediato tras navegación]")
             _debug_estructura(page, "tras domcontentloaded")
 
-        # ── 2. Esperar que la tabla renderice ───────────────────────────
-        print("\n2. Esperando que la tabla de attachments renderice...")
+        # ── 3. Esperar que la tabla renderice ───────────────────────────
+        print("\n3. Esperando que la tabla de attachments renderice...")
         tabla_encontrada = _esperar_tabla(page)
 
         if debug:
@@ -259,28 +318,44 @@ def main(record_id: str, cookies_path: str, headless: bool, debug: bool, save_ou
             print("    - El caso no tenga documentos adjuntos")
             print("    - El selector necesite ajuste para este org")
             print("    - La pagina tarde mas de 20s en renderizar")
+            if pause:
+                input("\n[PAUSE] Browser abierto para inspección. Presiona Enter para cerrar...")
             browser.close()
             sys.exit(1)
 
-        # ── 3. Verificar selectores ─────────────────────────────────────
-        print("\n3. Verificando selectores de la tabla...")
+        # ── 4. Verificar selectores ─────────────────────────────────────
+        print("\n4. Verificando selectores de la tabla...")
         for sel, desc in _SELECTORES_REQUERIDOS:
             count = len(page.query_selector_all(sel))
             status = "OK" if count > 0 else "WARN — no encontrado"
             print(f"   {desc:45s} [{count}]  {status}")
 
-        # ── 4. Extraer documentos ────────────────────────────────────────
-        print("\n4. Extrayendo documentos...")
+        # ── 5. Esperar filas (polling extra — thead != filas en SPA Lightning) ─
+        print("\n5. Esperando filas del tbody (polling extra post-thead)...")
+        n_filas = _esperar_filas(page)
+
+        if debug or n_filas == 0:
+            _debug_estructura(page, "tras polling de filas")
+
+        if n_filas == 0:
+            print("\nWARN: tabla cargada pero sin filas de datos.")
+            print("  Posibles causas:")
+            print("    - El caso no tiene adjuntos en CombinedAttachments")
+            print("    - La tabla usa virtualización y el selector necessita ajuste")
+            print("    - Las filas aún no renderizaron (considera aumentar max_intentos)")
+            if debug:
+                _dump_tabla_html(page)
+            if pause:
+                input("\n[PAUSE] Browser abierto para inspección. Presiona Enter para cerrar...")
+            browser.close()
+            sys.exit(1)
+
+        # ── 6. Extraer documentos ────────────────────────────────────────
+        print("\n6. Extrayendo documentos...")
         rows = page.query_selector_all(
             "table.uiVirtualDataTable tbody tr, table[role='grid'] tbody tr"
         )
         print(f"   Filas encontradas: {len(rows)}")
-
-        if not rows:
-            print("\nWARN: tabla cargada pero sin filas de datos.")
-            print("  El caso puede no tener adjuntos o los selectores de tbody tr necesitan ajuste.")
-            browser.close()
-            sys.exit(1)
 
         documentos = []
         for idx, row in enumerate(rows):
@@ -291,6 +366,9 @@ def main(record_id: str, cookies_path: str, headless: bool, debug: bool, save_ou
                 documentos.append(doc)
             else:
                 print(f"   WARN: fila {idx} no pudo parsearse (sin link ContentDocument)")
+
+        if pause:
+            input("\n[PAUSE] Browser abierto para inspección. Presiona Enter para cerrar...")
 
         browser.close()
 
@@ -355,13 +433,29 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--record-id",
-        required=True,
-        help="ID del registro del caso en Salesforce (ej. 500VY00000YWjzMYAT)",
+        default=None,
+        help="ID del registro del caso en Salesforce (ej. 500VY00000YWjzMYAT). "
+             "Alternativa a --case-number para smoke tests directos.",
+    )
+    parser.add_argument(
+        "--case-number",
+        default=None,
+        help="Número de caso visible (ej. CF0975). Si se pasa, se omite el resolver "
+             "y se usa el record-id directo si también se pasa, o falla si ninguno.",
+    )
+    parser.add_argument(
+        "--storage-state",
+        default=None,
+        metavar="RUTA",
+        help="Ruta al storageState de Playwright (cookies + localStorage). "
+             "Generado por: python scripts/capture_sf_session.py --local sf_state.json. "
+             "Recomendado — el plugin de cookies del browser no incluye localStorage.",
     )
     parser.add_argument(
         "--cookies",
         default="C:/Users/Subocol/Desktop/agente-analista-panama/exported-cookies.json",
-        help="Ruta al JSON de cookies exportadas del browser",
+        help="Ruta al JSON de cookies exportadas del browser (solo cookies HTTP, sin localStorage). "
+             "Puede fallar si Salesforce requiere el token de dispositivo confiable.",
     )
     parser.add_argument(
         "--headless",
@@ -373,7 +467,13 @@ if __name__ == "__main__":
         "--debug",
         action="store_true",
         default=False,
-        help="Mostrar diagnostico completo de selectores por fila",
+        help="Mostrar diagnostico completo de selectores por fila y dump de HTML",
+    )
+    parser.add_argument(
+        "--pause",
+        action="store_true",
+        default=False,
+        help="Mantener el browser abierto para inspeccion visual antes de cerrar",
     )
     parser.add_argument(
         "--output",
@@ -381,4 +481,6 @@ if __name__ == "__main__":
         help="Ruta donde guardar el JSON con los documentos extraidos",
     )
     args = parser.parse_args()
-    main(args.record_id, args.cookies, args.headless, args.debug, args.output)
+    if not args.record_id and not args.case_number:
+        parser.error("Se requiere --record-id o --case-number")
+    main(args.record_id, args.case_number, args.cookies, args.storage_state, args.headless, args.debug, args.pause, args.output)

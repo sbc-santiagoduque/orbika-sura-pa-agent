@@ -28,7 +28,7 @@ def lambda_handler(event, context):
         "actionGroup": "agente-crm-actions",
         "function": "review_historial_crm",
         "parameters": [
-            {"name": "sf_record_id", "type": "string", "value": "500xxxx"}
+            {"name": "case_number", "type": "string", "value": "CF0975"}
         ]
     }
     """
@@ -36,8 +36,8 @@ def lambda_handler(event, context):
 
     try:
         _validate_env_vars()
-        sf_record_id = _extraer_parametro(event, "sf_record_id")
-        resultado = _process(sf_record_id)
+        case_number = _extraer_parametro(event, "case_number")
+        resultado = _process(case_number)
         return _format_response(function_name, resultado)
 
     except Exception as exc:
@@ -61,7 +61,7 @@ def _extraer_parametro(event: dict, nombre: str) -> str:
     raise ValueError(f"Parametro requerido no encontrado: '{nombre}'")
 
 
-def _process(sf_record_id: str) -> dict:
+def _process(case_number: str) -> dict:
     # Import local para no bloquear tests sin Playwright instalado
     from src.tools.review_historial_crm.infrastructure.salesforce_case_scraper import (
         SalesforceCaseScraper,
@@ -73,7 +73,7 @@ def _process(sf_record_id: str) -> dict:
         ssm_password_path=os.environ.get("SSM_SF_PASSWORD_PATH"),
         sf_login_url=os.environ.get("SF_LOGIN_URL"),
     )
-    return scraper.obtener_historial(sf_record_id)
+    return scraper.obtener_historial(case_number)
 
 
 def _format_response(function_name: str, historial: dict) -> dict:

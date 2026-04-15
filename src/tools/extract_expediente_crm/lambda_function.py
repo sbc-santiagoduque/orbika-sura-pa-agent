@@ -29,7 +29,7 @@ def lambda_handler(event, context):
         "actionGroup": "agente-expediente-actions",
         "function": "extract_expediente_crm",
         "parameters": [
-            {"name": "sf_record_id", "type": "string", "value": "500xxxx"}
+            {"name": "case_number", "type": "string", "value": "CF0975"}
         ]
     }
     """
@@ -37,8 +37,8 @@ def lambda_handler(event, context):
 
     try:
         _validate_env_vars()
-        sf_record_id = _extraer_parametro(event, "sf_record_id")
-        expediente = _process(sf_record_id)
+        case_number = _extraer_parametro(event, "case_number")
+        expediente = _process(case_number)
         return _format_response(function_name, expediente)
 
     except Exception as exc:
@@ -60,7 +60,7 @@ def _extraer_parametro(event: dict, nombre: str) -> str:
     raise ValueError(f"Parametro requerido no encontrado: '{nombre}'")
 
 
-def _process(sf_record_id: str) -> dict:
+def _process(case_number: str) -> dict:
     # Import local para no bloquear tests sin Playwright instalado
     from src.tools.extract_expediente_crm.infrastructure.salesforce_attachments_scraper import (
         SalesforceAttachmentsScraper,
@@ -72,7 +72,7 @@ def _process(sf_record_id: str) -> dict:
         ssm_password_path=os.environ.get("SSM_SF_PASSWORD_PATH"),
         sf_login_url=os.environ.get("SF_LOGIN_URL"),
     )
-    return scraper.obtener_documentos(sf_record_id)
+    return scraper.obtener_documentos(case_number)
 
 
 def _format_response(function_name: str, expediente: dict) -> dict:

@@ -12,7 +12,7 @@ EVENT_BASE = {
     "actionGroup": "agente-crm-actions",
     "function": "review_historial_crm",
     "parameters": [
-        {"name": "sf_record_id", "type": "string", "value": "500SF000001ABCDE"}
+        {"name": "case_number", "type": "string", "value": "CF0975"}
     ],
 }
 
@@ -63,7 +63,7 @@ class TestReviewHistorialCrmHandler:
         assert h["status"] == "En Proceso"
         assert len(h["comments"]) == 2
 
-    def test_error_si_falta_parametro_sf_record_id(self, monkeypatch):
+    def test_error_si_falta_parametro_case_number(self, monkeypatch):
         for k, v in ENV_VARS.items():
             monkeypatch.setenv(k, v)
 

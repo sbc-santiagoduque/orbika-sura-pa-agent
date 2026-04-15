@@ -68,12 +68,13 @@ class SalesforceAttachmentsScraper:
         self._sf_login_url = sf_login_url
         self._telegram_bot = telegram_bot
 
-    def obtener_documentos(self, sf_record_id: str) -> dict:
+    def obtener_documentos(self, case_number: str) -> dict:
         """
-        Navega a la vista de attachments del caso y retorna los documentos.
+        Resuelve case_number → sf_record_id y navega a la vista de attachments.
 
         Args:
-            sf_record_id: ID de registro Salesforce (ej. "500VY00000YWjzMYAT").
+            case_number: Número de caso visible (ej. "CF0975"). El sf_record_id
+                         se resuelve internamente vía búsqueda global de Salesforce.
 
         Returns:
             {
@@ -92,14 +93,11 @@ class SalesforceAttachmentsScraper:
             }
         """
         from playwright.sync_api import sync_playwright
+        from src.shared.browser.salesforce_case_resolver import resolve_sf_record_id
 
-        url = (
-            f"{_SF_BASE_URL}/lightning/r/Case/{sf_record_id}"
-            f"/related/CombinedAttachments/view"
-        )
         logger.info(
-            "Navegando a attachments del caso",
-            extra={"url": url, "sf_record_id": sf_record_id},
+            "Extrayendo documentos CRM para case_number=%s", case_number,
+            extra={"case_number": case_number},
         )
 
         with sync_playwright() as pw:
@@ -107,15 +105,25 @@ class SalesforceAttachmentsScraper:
             context = self._session.inject_storage_state(browser)
             page = context.new_page()
 
-            page.goto(url, wait_until="domcontentloaded")
-
             if self._es_pagina_login(page):
                 logger.info("Sesion Salesforce expirada — ejecutando re-login automatico")
                 context.close()
                 self._refresh_login()
                 context = self._session.inject_storage_state(browser)
                 page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded")
+
+            # Resolver case_number → sf_record_id via búsqueda global
+            sf_record_id = resolve_sf_record_id(page, case_number)
+
+            url = (
+                f"{_SF_BASE_URL}/lightning/r/Case/{sf_record_id}"
+                f"/related/CombinedAttachments/view"
+            )
+            logger.info(
+                "Navegando a attachments del caso",
+                extra={"url": url, "sf_record_id": sf_record_id},
+            )
+            page.goto(url, wait_until="domcontentloaded")
 
             self._esperar_tabla_cargada(page)
             documentos = self._extraer_documentos(page)

@@ -13,7 +13,7 @@ EVENT_BASE = {
     "actionGroup": "agente-expediente-actions",
     "function": "extract_expediente_crm",
     "parameters": [
-        {"name": "sf_record_id", "type": "string", "value": "500VY00000YWjzMYAT"}
+        {"name": "case_number", "type": "string", "value": "CF0975"}
     ],
 }
 
@@ -102,7 +102,7 @@ class TestExtractExpedienteCrmHandler:
         assert body["expediente"]["imagen_count"] == 0
         assert body["expediente"]["documentos"] == []
 
-    def test_error_si_falta_parametro_sf_record_id(self, monkeypatch):
+    def test_error_si_falta_parametro_case_number(self, monkeypatch):
         for k, v in ENV_VARS.items():
             monkeypatch.setenv(k, v)
 
