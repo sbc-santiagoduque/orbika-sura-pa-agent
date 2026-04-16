@@ -1,23 +1,28 @@
 """
-Cliente SIC específico para recolección de datos de reclamo.
+Cliente SIC para recolección de datos de reclamo.
 
-A diferencia de extract_expediente_sic_api (que extrae imágenes),
-este cliente extrae los datos del evento necesarios para abrir el
-reclamo en Premium:
-  - Fecha, hora y lugar del siniestro
-  - Datos del conductor (cédula, nombre, apellido, sexo, edad)
-  - Responsabilidad (driverFault → Culpable / Inocente)
-  - Descripción del siniestro (FUD)
-
-Auth flow (igual que sic_api_client.py existente):
+Flujo real (4 requests — mismo auth que sic_api_client.py en extract_expediente_sic_api):
   1. POST /api/v1/users/auth          → accessToken + sub
   2. GET  /api/v1/users/{sub}         → userCompanyID + codPais
-  3. GET  /api/v2/events/search       → lista de eventos por placa
-  4. Filtrar por eventRecord == expediente
+  3. GET  /api/v2/events/search       → lista eventos por placa → obtener EventId
+  4. GET  /api/v1/events/{EventId}    → detalle completo del evento
 
-TODO: validar nombres de campos del evento contra la API real.
-      Los campos (driverIdNumber, driverFirstName, etc.) se infieren
-      del bundle JS del app SIC. Confirmar con un evento real en staging.
+El endpoint de detalle (/api/v1/events/{EventId}) provee prácticamente todo:
+  - noPoliza          → número de póliza (evita necesidad de Consulta Integral)
+  - eventDateSinister / timeSinister / placeDirectionSinister → fecha/hora/lugar
+  - storyDetail       → descripción del conductor
+  - driverId / driverName / driverLastName / driverGender / driverBirthDate
+  - coverages[0].coverageName → cobertura para calcular reserva
+  - IndResponsible    → responsabilidad (vacío si no determinada aún)
+
+Nota sobre driverGender:
+  Observado en API real: Cristobal (masculino) → driverGender = 2
+  TODO: confirmar con SIC/ConnectAssistance el mapping exacto.
+  Asumiendo 1=F, 2=M hasta confirmación.
+
+Nota sobre IndResponsible:
+  Campo vacío ("") cuando no está determinada la responsabilidad.
+  El DataCollector lo mapea a "Pendiente" para indicar revisión manual.
 """
 import logging
 import os
@@ -28,52 +33,54 @@ logger = logging.getLogger(__name__)
 
 _SIC_API_BASE_DEFAULT = "https://api-bkp.claims-sic.apps-connectassistance.com"
 
-# API key fija — hardcodeada en el bundle JS del app SIC
+# API key fija — hardcodeada en el bundle JS del app SIC (sic.connectasistencia.com)
 _API_KEY = "key_c5b4ad82c99e7abf75055d4095ba74c49632bf209b75f844fb2609d1e5900c17"
 _API_KEY_HEADERS = {"Authorization": _API_KEY, "Accept": "application/json"}
 
-# Reglas de reserva por cobertura (según protocolo sección 8.5)
+# Reglas de reserva por cobertura (protocolo sección 8.5)
 _RESERVAS = {
-    "COLISION":  1300.0,
+    "COLISI":    1300.0,   # Colisión o Vuelco
     "VUELCO":    1300.0,
     "ROBO":      5000.0,
     "INCENDIO":  2500.0,
 }
 _RESERVA_DEFAULT = 1000.0
 
-# Palabras clave para inferir tipo de siniestro desde descripción
+# Inferencia de tipo de siniestro desde nombre de cobertura o descripción
 _TIPOS_SINIESTRO = {
-    "Colision":  ["colision", "colisión", "choque", "impacto"],
+    "Colision":  ["colisi", "vuelco", "choque", "impacto"],
     "Robo":      ["robo", "hurto", "sustraccion"],
     "Incendio":  ["incendio", "fuego", "quemado"],
 }
+
+# Mapping de driverGender (código numérico SIC → M/F)
+# TODO: confirmar con SIC/ConnectAssistance — observado: Cristobal(M) → 2
+_GENDER_MAP = {1: "F", 2: "M"}
 
 
 def _base_url() -> str:
     return os.environ.get("SIC_API_BASE_URL", _SIC_API_BASE_DEFAULT).rstrip("/")
 
 
-def _determinar_tipo_siniestro(descripcion: str) -> str:
+def _determinar_tipo_siniestro(texto: str) -> str:
     """
-    Infiere el tipo de siniestro a partir de la descripción del evento SIC.
+    Infiere el tipo de siniestro desde el nombre de cobertura o descripción.
 
     Retorna: "Colision" | "Robo" | "Incendio" | "Otro"
     """
-    desc_lower = descripcion.lower()
+    texto_lower = (texto or "").lower()
     for tipo, palabras in _TIPOS_SINIESTRO.items():
-        if any(p in desc_lower for p in palabras):
+        if any(p in texto_lower for p in palabras):
             return tipo
     return "Otro"
 
 
 def _determinar_reserva(cobertura: str) -> float:
     """
-    Determina el monto de reserva según la cobertura de Consulta Integral.
-
-    Retorna el monto definido en el protocolo sección 8.5,
-    o _RESERVA_DEFAULT si la cobertura no está mapeada.
+    Retorna el monto de reserva según la cobertura (protocolo sección 8.5).
+    Default $1000 si la cobertura no está mapeada.
     """
-    cobertura_upper = cobertura.upper()
+    cobertura_upper = (cobertura or "").upper()
     for keyword, monto in _RESERVAS.items():
         if keyword in cobertura_upper:
             return monto
@@ -82,7 +89,8 @@ def _determinar_reserva(cobertura: str) -> float:
 
 class SICReclamoClient:
     """
-    Extrae datos de evento del SIC REST API para la apertura de reclamos.
+    Extrae todos los datos necesarios para crear un reclamo en Premium
+    desde el SIC REST API.
 
     Uso:
         from src.shared.sic_api.sic_api_session import SICApiSession
@@ -92,7 +100,7 @@ class SICReclamoClient:
             ssm_password_path=os.environ["SSM_SIC_API_PASSWORD_PATH"],
         )
         client = SICReclamoClient(session)
-        evento = client.obtener_datos_evento("XYZ123", "EXP001")
+        evento = client.obtener_datos_evento("EJ1949", "5134134")
     """
 
     def __init__(self, session):
@@ -100,46 +108,57 @@ class SICReclamoClient:
 
     def obtener_datos_evento(self, placa: str, expediente: str) -> dict:
         """
-        Retorna el dict completo del evento SIC para la placa + expediente.
+        Retorna el dict completo del detalle de evento para placa + expediente.
+
+        Flujo interno:
+          1. Auth → token
+          2. Datos de usuario → userCompanyID
+          3. Search por placa → filtrar por eventRecord → extraer EventId
+          4. GET /api/v1/events/{EventId} → dict completo
 
         Args:
-            placa:      Placa del vehículo asegurado.
-            expediente: Número de expediente (= eventRecord en SIC).
+            placa:      Placa del vehículo asegurado (ej. "EJ1949").
+            expediente: EventRecord del SIC (ej. "5134134").
 
         Returns:
-            Dict con todos los campos del evento. Campos esperados:
-              eventRecord, eventDate, eventTime, eventLocation,
-              eventDescription, driverIdNumber, driverFirstName,
-              driverLastName, driverGender, driverAge, driverFault
+            Dict del campo data.event de la respuesta. Incluye noPoliza,
+            driverName, driverId, driverGender, driverBirthDate,
+            eventDateSinister, timeSinister, placeDirectionSinister,
+            storyDetail, coverages, IndResponsible, etc.
 
         Raises:
-            ValueError: si no se encuentra el expediente para esa placa.
-            RuntimeError: si falla la autenticación o la consulta HTTP.
+            ValueError: si el expediente no existe para esa placa.
+            RuntimeError: si falla auth, permisos o el API responde error.
         """
         access_token, sub = self._autenticar()
         user_company_id, country_code = self._obtener_datos_usuario(sub)
         headers = self._bearer_headers(access_token)
 
-        evento = self._buscar_evento_por_expediente(
+        event_id = self._buscar_event_id_por_expediente(
             placa, expediente, user_company_id, country_code, headers
         )
+        evento = self._obtener_detalle_evento(event_id, headers)
 
         logger.info(
-            "Datos de evento SIC obtenidos para reclamo",
-            extra={"placa": placa, "expediente": expediente},
+            "Detalle de evento SIC obtenido para reclamo",
+            extra={
+                "placa": placa,
+                "expediente": expediente,
+                "event_id": event_id,
+                "no_poliza": evento.get("noPoliza"),
+            },
         )
         return evento
 
     # ------------------------------------------------------------------
-    # Internos — auth flow (mismo patrón que sic_api_client.py)
+    # Internos
     # ------------------------------------------------------------------
 
     def _autenticar(self) -> tuple[str, str]:
         """POST /api/v1/users/auth → (accessToken, sub)."""
-        base = _base_url()
         username, password = self._session.load_credentials()
         resp = requests.post(
-            f"{base}/api/v1/users/auth",
+            f"{_base_url()}/api/v1/users/auth",
             json={"username": username, "password": password, "mfaCode": None, "challengeSession": None},
             headers=_API_KEY_HEADERS,
             timeout=15,
@@ -149,10 +168,9 @@ class SICReclamoClient:
 
         access_token = data.get("accessToken")
         if not access_token:
-            raise RuntimeError(f"SIC auth: no accessToken en respuesta. Claves: {list(data.keys())}")
+            raise RuntimeError(f"SIC auth: no accessToken. Claves: {list(data.keys())}")
 
-        sub = data.get("sub", "")
-        return access_token, sub
+        return access_token, data.get("sub", "")
 
     def _obtener_datos_usuario(self, sub: str) -> tuple[int, str]:
         """GET /api/v1/users/{sub} → (userCompanyID, codPais)."""
@@ -200,18 +218,56 @@ class SICReclamoClient:
             return data
         return []
 
-    def _buscar_evento_por_expediente(
+    def _buscar_event_id_por_expediente(
         self, placa: str, expediente: str, user_id: int, country_code: str, headers: dict
-    ) -> dict:
-        """Retorna el evento cuyo eventRecord == expediente."""
+    ) -> int:
+        """
+        Busca el EventId (entero) para el eventRecord == expediente.
+
+        El EventId es necesario para llamar /api/v1/events/{EventId}.
+        """
         eventos = self._listar_eventos(placa, user_id, country_code, headers)
         for evento in eventos:
             if str(evento.get("eventRecord", "")) == str(expediente):
-                return evento
+                # El campo puede llamarse EventId, eventId o id según la versión de la API
+                event_id = (
+                    evento.get("EventId")
+                    or evento.get("eventId")
+                    or evento.get("id")
+                )
+                if not event_id:
+                    raise RuntimeError(
+                        f"Evento '{expediente}' encontrado pero sin EventId. "
+                        f"Claves disponibles: {list(evento.keys())}"
+                    )
+                return int(event_id)
+
         raise ValueError(
-            f"Expediente '{expediente}' no encontrado en SIC para placa '{placa}'. "
-            f"Disponibles: {[e.get('eventRecord') for e in eventos]}"
+            f"Expediente '{expediente}' no encontrado para placa '{placa}'. "
+            f"Expedientes disponibles: {[e.get('eventRecord') for e in eventos]}"
         )
+
+    def _obtener_detalle_evento(self, event_id: int, headers: dict) -> dict:
+        """
+        GET /api/v1/events/{EventId} → data.event completo.
+
+        Retorna el dict interno del evento (no el wrapper de la respuesta).
+        """
+        resp = requests.get(
+            f"{_base_url()}/api/v1/events/{event_id}",
+            headers=headers,
+            timeout=20,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+        if not body.get("success"):
+            raise RuntimeError(
+                f"SIC /api/v1/events/{event_id}: success=false. "
+                f"Error: {body.get('error')}"
+            )
+
+        return body["data"]["event"]
 
     @staticmethod
     def _bearer_headers(access_token: str) -> dict:

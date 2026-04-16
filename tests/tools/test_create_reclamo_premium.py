@@ -1,20 +1,28 @@
 """
 Tests para create_reclamo_premium — Phase A: recolección de datos.
 
+Usa la estructura real de la API SIC (GET /api/v1/events/{EventId})
+confirmada en inspección de red el 2026-04-16.
+
 Cubre:
   - lambda_handler: orquestación completa y manejo de errores
-  - DataCollector: agrega datos de SIC + Consulta Integral
-  - SICReclamoClient: llamadas HTTP al SIC REST API
-  - ConsultaIntegralScraper: (mock) extracción de póliza y coberturas
-  - _determinar_reserva: reglas de negocio por tipo de cobertura
+  - DataCollector: agrega datos del evento SIC detail
+  - SICReclamoClient: auth flow + events search + detail endpoint
+  - Helpers: _calcular_edad, _mapear_genero, _mapear_responsabilidad
+  - _determinar_tipo_siniestro / _determinar_reserva: reglas de negocio
 """
 import json
 import pytest
 from datetime import date
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import src.tools.create_reclamo_premium.lambda_function as handler_module
-from src.tools.create_reclamo_premium.service.data_collector import DataCollector
+from src.tools.create_reclamo_premium.service.data_collector import (
+    DataCollector,
+    _calcular_edad,
+    _mapear_genero,
+    _mapear_responsabilidad,
+)
 from src.tools.create_reclamo_premium.service.reclamo_models import (
     DatosReclamo,
     DatosConductor,
@@ -28,7 +36,8 @@ from src.tools.create_reclamo_premium.infrastructure.sic_reclamo_client import (
 )
 
 # ---------------------------------------------------------------------------
-# Fixtures / datos de prueba
+# Fixture — evento real del endpoint GET /api/v1/events/{EventId}
+# Confirmado en inspección de red 2026-04-16 (EventId: 1788291)
 # ---------------------------------------------------------------------------
 
 ENV_VARS = {
@@ -37,51 +46,35 @@ ENV_VARS = {
     "SIC_API_BASE_URL": "https://api-bkp.claims-sic.apps-connectassistance.com",
 }
 
-EVENTO_SIC = {
-    "eventRecord": "EXP001",
-    "eventDate": "2026-03-03T13:50:00Z",
-    "eventTime": "13:50",
-    "eventLocation": "Panama",
-    "eventDescription": "Colision vehicular en avenida principal",
-    "driverIdNumber": "4-702-1179",
-    "driverFirstName": "Alberto",
-    "driverLastName": "Antonio",
-    "driverGender": "M",
-    "driverAge": 45,
-    "driverFault": True,
+# Estructura real del campo data.event del endpoint de detalle
+EVENTO_SIC_DETAIL = {
+    "EventId": 1788291,
+    "EventRecord": "5134134",
+    "noPoliza": "02-93-1142585-1",
+    "eventDateSinister": "2026-04-16",
+    "timeSinister": "12:14:00",
+    "placeDirectionSinister": "Al frente del colegio San Vicente de Paul, Santiago.",
+    "storyDetail": "Venía hacia el colegio y al llegar, me encontré con un vehículo mal estacionado.",
+    "driverId": "4-218-210",
+    "driverName": "Cristobal",
+    "driverLastName": " cedeño marrone",
+    "driverGender": 2,
+    "driverBirthDate": "1960-12-08",
+    "IndResponsible": "",
+    "plate": "EJ1949",
+    "brand": "FORTHING",
+    "model": "T5EVO",
+    "year": "2024",
+    "coverages": [{"coverageId": 2, "coverageName": "Colisión o Vuelco"}],
+    "collisionType": "Menor",
 }
 
-DATOS_POLIZA = {
-    "numero_poliza": "02-37-1252419-0",
-    "cobertura": "POR COLISION O VUELCO",
-    "suma_asegurada": 25000.0,
+# Evento en search (estructura de /api/v2/events/search)
+EVENTO_SEARCH = {
+    "eventRecord": "5134134",
+    "EventId": 1788291,
+    "eventDate": "2026-04-16T12:14:00Z",
 }
-
-RECLAMO_DATA_ESPERADO = DatosReclamo(
-    case_number="02195167",
-    numero_poliza="02-37-1252419-0",
-    siniestro=DatosSiniestro(
-        fecha="2026-03-03",
-        hora="13:50",
-        lugar="Panama",
-        tipo="Colision",
-        descripcion="Colision vehicular en avenida principal",
-        fecha_recibo_documentos=date.today().isoformat(),
-    ),
-    conductor=DatosConductor(
-        cedula="4-702-1179",
-        nombre="Alberto",
-        apellido="Antonio",
-        sexo="M",
-        edad=45,
-        responsabilidad="Culpable",
-    ),
-    poliza=DatosPoliza(
-        cobertura="POR COLISION O VUELCO",
-        reserva=1300.0,
-    ),
-    ajustador_interno=158,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -94,10 +87,10 @@ class TestCreateReclamoPremiumHandler:
     def test_retorna_200_con_reclamo_data(self, mock_recolectar, monkeypatch):
         for k, v in ENV_VARS.items():
             monkeypatch.setenv(k, v)
-        mock_recolectar.return_value = RECLAMO_DATA_ESPERADO
+        mock_recolectar.return_value = _make_reclamo_data()
 
         resultado = handler_module.lambda_handler(
-            {"case_number": "02195167", "placa": "XYZ123", "expediente": "EXP001"}, {}
+            {"case_number": "02195167", "placa": "EJ1949", "expediente": "5134134"}, {}
         )
 
         assert resultado["statusCode"] == 200
@@ -106,21 +99,21 @@ class TestCreateReclamoPremiumHandler:
         assert "reclamo_data" in body
 
     @patch("src.tools.create_reclamo_premium.lambda_function._recolectar_datos")
-    def test_reclamo_data_serializa_correctamente(self, mock_recolectar, monkeypatch):
+    def test_reclamo_data_serializa_campos_reales(self, mock_recolectar, monkeypatch):
         for k, v in ENV_VARS.items():
             monkeypatch.setenv(k, v)
-        mock_recolectar.return_value = RECLAMO_DATA_ESPERADO
+        mock_recolectar.return_value = _make_reclamo_data()
 
         resultado = handler_module.lambda_handler(
-            {"case_number": "02195167", "placa": "XYZ123", "expediente": "EXP001"}, {}
+            {"case_number": "02195167", "placa": "EJ1949", "expediente": "5134134"}, {}
         )
         body = json.loads(resultado["body"])
         reclamo = body["reclamo_data"]
 
-        assert reclamo["numero_poliza"] == "02-37-1252419-0"
-        assert reclamo["siniestro"]["fecha"] == "2026-03-03"
-        assert reclamo["conductor"]["cedula"] == "4-702-1179"
-        assert reclamo["conductor"]["responsabilidad"] == "Culpable"
+        assert reclamo["numero_poliza"] == "02-93-1142585-1"
+        assert reclamo["siniestro"]["fecha"] == "2026-04-16"
+        assert reclamo["siniestro"]["hora"] == "12:14"
+        assert reclamo["conductor"]["cedula"] == "4-218-210"
         assert reclamo["poliza"]["reserva"] == 1300.0
         assert reclamo["ajustador_interno"] == 158
 
@@ -128,7 +121,7 @@ class TestCreateReclamoPremiumHandler:
         for k, v in ENV_VARS.items():
             monkeypatch.setenv(k, v)
 
-        resultado = handler_module.lambda_handler({"placa": "XYZ123"}, {})
+        resultado = handler_module.lambda_handler({"placa": "EJ1949"}, {})
 
         assert resultado["statusCode"] == 400
         body = json.loads(resultado["body"])
@@ -146,7 +139,7 @@ class TestCreateReclamoPremiumHandler:
         monkeypatch.delenv("SSM_SIC_API_USERNAME_PATH", raising=False)
 
         resultado = handler_module.lambda_handler(
-            {"case_number": "02195167", "placa": "XYZ123", "expediente": "EXP001"}, {}
+            {"case_number": "02195167", "placa": "EJ1949", "expediente": "5134134"}, {}
         )
 
         assert resultado["statusCode"] == 500
@@ -158,7 +151,7 @@ class TestCreateReclamoPremiumHandler:
         mock_recolectar.side_effect = RuntimeError("SIC no disponible")
 
         resultado = handler_module.lambda_handler(
-            {"case_number": "02195167", "placa": "XYZ123", "expediente": "EXP001"}, {}
+            {"case_number": "02195167", "placa": "EJ1949", "expediente": "5134134"}, {}
         )
 
         assert resultado["statusCode"] == 500
@@ -175,77 +168,117 @@ class TestDataCollector:
     def _make_collector(self, sic_client=None, ci_scraper=None):
         collector = DataCollector.__new__(DataCollector)
         collector._sic = sic_client or MagicMock()
-        collector._ci  = ci_scraper or MagicMock()
+        collector._ci  = ci_scraper
         return collector
 
-    def test_retorna_datos_reclamo_completo(self):
+    def test_retorna_datos_reclamo_con_poliza_de_sic(self):
         sic = MagicMock()
-        sic.obtener_datos_evento.return_value = EVENTO_SIC
-        ci = MagicMock()
-        ci.obtener_datos_poliza.return_value = DATOS_POLIZA
-        collector = self._make_collector(sic, ci)
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
 
-        resultado = collector.recolectar("02195167", "XYZ123", "EXP001")
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
 
         assert isinstance(resultado, DatosReclamo)
-        assert resultado.case_number == "02195167"
+        assert resultado.numero_poliza == "02-93-1142585-1"
 
-    def test_llama_sic_con_placa_y_expediente(self):
+    def test_llama_sic_con_placa_y_expediente_correctos(self):
         sic = MagicMock()
-        sic.obtener_datos_evento.return_value = EVENTO_SIC
-        ci = MagicMock()
-        ci.obtener_datos_poliza.return_value = DATOS_POLIZA
-        collector = self._make_collector(sic, ci)
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
 
-        collector.recolectar("02195167", "XYZ123", "EXP001")
+        collector.recolectar("02195167", "EJ1949", "5134134")
 
-        sic.obtener_datos_evento.assert_called_once_with("XYZ123", "EXP001")
+        sic.obtener_datos_evento.assert_called_once_with("EJ1949", "5134134")
 
-    def test_conductor_responsabilidad_culpable_si_driverFault_true(self):
+    def test_fecha_siniestro_viene_de_eventDateSinister(self):
         sic = MagicMock()
-        evento = {**EVENTO_SIC, "driverFault": True}
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.siniestro.fecha == "2026-04-16"
+
+    def test_hora_truncada_a_HH_MM(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.siniestro.hora == "12:14"
+
+    def test_cobertura_colision_da_reserva_1300(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.poliza.cobertura == "Colisión o Vuelco"
+        assert resultado.poliza.reserva == 1300.0
+
+    def test_conductor_cedula_desde_driverId(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.conductor.cedula == "4-218-210"
+
+    def test_conductor_apellido_sin_espacios_leading(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.conductor.apellido == "cedeño marrone"
+
+    def test_conductor_responsabilidad_pendiente_si_ind_responsible_vacio(self):
+        sic = MagicMock()
+        evento = {**EVENTO_SIC_DETAIL, "IndResponsible": ""}
         sic.obtener_datos_evento.return_value = evento
-        ci = MagicMock()
-        ci.obtener_datos_poliza.return_value = DATOS_POLIZA
-        collector = self._make_collector(sic, ci)
+        collector = self._make_collector(sic)
 
-        resultado = collector.recolectar("02195167", "XYZ123", "EXP001")
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
 
-        assert resultado.conductor.responsabilidad == "Culpable"
-
-    def test_conductor_responsabilidad_inocente_si_driverFault_false(self):
-        sic = MagicMock()
-        evento = {**EVENTO_SIC, "driverFault": False}
-        sic.obtener_datos_evento.return_value = evento
-        ci = MagicMock()
-        ci.obtener_datos_poliza.return_value = DATOS_POLIZA
-        collector = self._make_collector(sic, ci)
-
-        resultado = collector.recolectar("02195167", "XYZ123", "EXP001")
-
-        assert resultado.conductor.responsabilidad == "Inocente"
+        assert resultado.conductor.responsabilidad == "Pendiente"
 
     def test_fecha_recibo_docs_es_hoy(self):
         sic = MagicMock()
-        sic.obtener_datos_evento.return_value = EVENTO_SIC
-        ci = MagicMock()
-        ci.obtener_datos_poliza.return_value = DATOS_POLIZA
-        collector = self._make_collector(sic, ci)
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
 
-        resultado = collector.recolectar("02195167", "XYZ123", "EXP001")
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
 
         assert resultado.siniestro.fecha_recibo_documentos == date.today().isoformat()
 
     def test_ajustador_interno_siempre_158(self):
         sic = MagicMock()
-        sic.obtener_datos_evento.return_value = EVENTO_SIC
-        ci = MagicMock()
-        ci.obtener_datos_poliza.return_value = DATOS_POLIZA
-        collector = self._make_collector(sic, ci)
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
 
-        resultado = collector.recolectar("02195167", "XYZ123", "EXP001")
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
 
         assert resultado.ajustador_interno == 158
+
+    def test_poliza_fallback_a_ci_si_sic_no_tiene_noPoliza(self):
+        sic = MagicMock()
+        evento_sin_poliza = {**EVENTO_SIC_DETAIL, "noPoliza": ""}
+        sic.obtener_datos_evento.return_value = evento_sin_poliza
+
+        ci = MagicMock()
+        ci.obtener_datos_poliza.return_value = {
+            "numero_poliza": "02-37-0000000-0",
+            "cobertura": "Colisión o Vuelco",
+        }
+        collector = self._make_collector(sic, ci)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.numero_poliza == "02-37-0000000-0"
 
 
 # ---------------------------------------------------------------------------
@@ -254,14 +287,14 @@ class TestDataCollector:
 
 class TestSICReclamoClient:
 
-    def _make_client(self) -> tuple["SICReclamoClient", MagicMock]:
+    def _make_client(self) -> tuple[SICReclamoClient, MagicMock]:
         client = SICReclamoClient.__new__(SICReclamoClient)
         client._session = MagicMock()
         client._session.load_credentials.return_value = ("user", "pass")
         return client, client._session
 
     @patch("src.tools.create_reclamo_premium.infrastructure.sic_reclamo_client.requests")
-    def test_autenticacion_exitosa_retorna_token(self, mock_requests):
+    def test_autenticacion_exitosa_retorna_token_y_sub(self, mock_requests):
         client, _ = self._make_client()
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"data": {"accessToken": "tok123", "sub": "uuid-abc"}}
@@ -276,9 +309,7 @@ class TestSICReclamoClient:
     def test_obtener_datos_usuario_retorna_company_y_pais(self, mock_requests):
         client, _ = self._make_client()
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "data": {"userCompanyID": 99, "codPais": "PAN"}
-        }
+        mock_resp.json.return_value = {"data": {"userCompanyID": 99, "codPais": "PAN"}}
         mock_requests.get.return_value = mock_resp
 
         company_id, pais = client._obtener_datos_usuario("uuid-abc")
@@ -287,61 +318,105 @@ class TestSICReclamoClient:
         assert pais == "PAN"
 
     @patch("src.tools.create_reclamo_premium.infrastructure.sic_reclamo_client.requests")
-    def test_lista_eventos_retorna_lista(self, mock_requests):
+    def test_buscar_event_id_encuentra_por_eventRecord(self, mock_requests):
         client, _ = self._make_client()
         mock_resp = MagicMock()
         mock_resp.json.return_value = {
-            "data": {"response": {"events": [EVENTO_SIC]}}
+            "data": {"response": {"events": [EVENTO_SEARCH]}}
         }
         mock_requests.get.return_value = mock_resp
 
-        eventos = client._listar_eventos("XYZ123", 1, "PAN", {})
+        event_id = client._buscar_event_id_por_expediente("EJ1949", "5134134", 1, "PAN", {})
 
-        assert len(eventos) == 1
-        assert eventos[0]["eventRecord"] == "EXP001"
+        assert event_id == 1788291
 
     @patch("src.tools.create_reclamo_premium.infrastructure.sic_reclamo_client.requests")
-    def test_obtener_datos_evento_filtra_por_expediente(self, mock_requests):
+    def test_buscar_event_id_lanza_error_si_no_existe(self, mock_requests):
         client, _ = self._make_client()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"data": {"response": {"events": [EVENTO_SEARCH]}}}
+        mock_requests.get.return_value = mock_resp
 
-        otro_evento = {**EVENTO_SIC, "eventRecord": "EXP999"}
+        with pytest.raises(ValueError, match="9999999"):
+            client._buscar_event_id_por_expediente("EJ1949", "9999999", 1, "PAN", {})
 
-        mock_auth = MagicMock()
-        mock_auth.json.return_value = {"data": {"accessToken": "tok", "sub": "sub"}}
-
-        mock_user = MagicMock()
-        mock_user.json.return_value = {"data": {"userCompanyID": 1, "codPais": "PAN"}}
-
-        mock_eventos = MagicMock()
-        mock_eventos.json.return_value = {
-            "data": {"response": {"events": [EVENTO_SIC, otro_evento]}}
+    @patch("src.tools.create_reclamo_premium.infrastructure.sic_reclamo_client.requests")
+    def test_obtener_detalle_evento_retorna_event_dict(self, mock_requests):
+        client, _ = self._make_client()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "success": True,
+            "data": {"event": EVENTO_SIC_DETAIL},
         }
+        mock_requests.get.return_value = mock_resp
 
-        mock_requests.post.return_value = mock_auth
-        mock_requests.get.side_effect = [mock_user, mock_eventos]
+        evento = client._obtener_detalle_evento(1788291, {})
 
-        evento = client.obtener_datos_evento("XYZ123", "EXP001")
-
-        assert evento["eventRecord"] == "EXP001"
+        assert evento["EventId"] == 1788291
+        assert evento["noPoliza"] == "02-93-1142585-1"
 
     @patch("src.tools.create_reclamo_premium.infrastructure.sic_reclamo_client.requests")
-    def test_lanza_error_si_expediente_no_existe(self, mock_requests):
+    def test_obtener_detalle_lanza_error_si_success_false(self, mock_requests):
         client, _ = self._make_client()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"success": False, "error": "not found"}
+        mock_requests.get.return_value = mock_resp
 
-        mock_auth = MagicMock()
-        mock_auth.json.return_value = {"data": {"accessToken": "tok", "sub": "sub"}}
+        with pytest.raises(RuntimeError, match="success=false"):
+            client._obtener_detalle_evento(9999, {})
 
-        mock_user = MagicMock()
-        mock_user.json.return_value = {"data": {"userCompanyID": 1, "codPais": "PAN"}}
 
-        mock_eventos = MagicMock()
-        mock_eventos.json.return_value = {"data": {"response": {"events": []}}}
+# ---------------------------------------------------------------------------
+# Helper function tests
+# ---------------------------------------------------------------------------
 
-        mock_requests.post.return_value = mock_auth
-        mock_requests.get.side_effect = [mock_user, mock_eventos]
+class TestCalcularEdad:
 
-        with pytest.raises(ValueError, match="EXP999"):
-            client.obtener_datos_evento("XYZ123", "EXP999")
+    def test_calcula_edad_correcta(self):
+        # Cristobal nació 1960-12-08 → 65 años en 2026
+        edad = _calcular_edad("1960-12-08")
+        assert edad in (65, 66)  # depende de si ya pasó el cumpleaños en 2026
+
+    def test_fecha_vacia_retorna_cero(self):
+        assert _calcular_edad("") == 0
+
+    def test_fecha_invalida_retorna_cero(self):
+        assert _calcular_edad("no-es-fecha") == 0
+
+    def test_fecha_con_timestamp_usa_solo_fecha(self):
+        edad = _calcular_edad("1960-12-08T00:00:00")
+        assert edad > 0
+
+
+class TestMapearGenero:
+
+    def test_codigo_2_retorna_M(self):
+        # Confirmado: Cristobal (M) → driverGender = 2
+        assert _mapear_genero(2) == "M"
+
+    def test_codigo_1_retorna_F(self):
+        assert _mapear_genero(1) == "F"
+
+    def test_ninguno_retorna_M_como_default(self):
+        assert _mapear_genero(None) == "M"
+
+    def test_codigo_desconocido_retorna_M(self):
+        assert _mapear_genero(99) == "M"
+
+
+class TestMapearResponsabilidad:
+
+    def test_vacio_retorna_pendiente(self):
+        assert _mapear_responsabilidad("") == "Pendiente"
+
+    def test_none_retorna_pendiente(self):
+        assert _mapear_responsabilidad(None) == "Pendiente"
+
+    def test_uno_retorna_culpable(self):
+        assert _mapear_responsabilidad("1") == "Culpable"
+
+    def test_dos_retorna_inocente(self):
+        assert _mapear_responsabilidad("2") == "Inocente"
 
 
 # ---------------------------------------------------------------------------
@@ -350,22 +425,25 @@ class TestSICReclamoClient:
 
 class TestDeterminarTipoSiniestro:
 
-    def test_colision_desde_descripcion(self):
-        assert _determinar_tipo_siniestro("colision vehicular grave") == "Colision"
+    def test_colision_desde_nombre_cobertura(self):
+        assert _determinar_tipo_siniestro("Colisión o Vuelco") == "Colision"
 
-    def test_colision_mayusculas(self):
-        assert _determinar_tipo_siniestro("COLISION en autopista") == "Colision"
+    def test_colision_desde_descripcion(self):
+        assert _determinar_tipo_siniestro("venía hacia la colisión en la vía") == "Colision"
 
     def test_robo_desde_descripcion(self):
-        assert _determinar_tipo_siniestro("robo del vehiculo") == "Robo"
+        assert _determinar_tipo_siniestro("robo del vehiculo en zona céntrica") == "Robo"
 
     def test_incendio_desde_descripcion(self):
         assert _determinar_tipo_siniestro("incendio total del auto") == "Incendio"
 
-    def test_tipo_desconocido_retorna_otro(self):
-        assert _determinar_tipo_siniestro("accidente sin descripcion clara") == "Otro"
+    def test_vuelco_mapea_a_colision(self):
+        assert _determinar_tipo_siniestro("vuelco del vehículo") == "Colision"
 
-    def test_descripcion_vacia_retorna_otro(self):
+    def test_desconocido_retorna_otro(self):
+        assert _determinar_tipo_siniestro("daños mecánicos en la transmisión") == "Otro"
+
+    def test_vacio_retorna_otro(self):
         assert _determinar_tipo_siniestro("") == "Otro"
 
 
@@ -375,20 +453,52 @@ class TestDeterminarTipoSiniestro:
 
 class TestDeterminarReserva:
 
-    def test_colision_retorna_1300(self):
+    def test_colision_o_vuelco_retorna_1300(self):
+        assert _determinar_reserva("Colisión o Vuelco") == 1300.0
+
+    def test_colision_mayusculas(self):
         assert _determinar_reserva("POR COLISION O VUELCO") == 1300.0
 
-    def test_colision_parcial_match(self):
-        assert _determinar_reserva("COLISION") == 1300.0
-
-    def test_robo_retorna_reserva_robo(self):
+    def test_robo_retorna_5000(self):
         assert _determinar_reserva("POR ROBO") == 5000.0
 
-    def test_incendio_retorna_reserva_incendio(self):
+    def test_incendio_retorna_2500(self):
         assert _determinar_reserva("POR INCENDIO") == 2500.0
 
-    def test_cobertura_desconocida_retorna_default(self):
+    def test_cobertura_desconocida_retorna_1000(self):
         assert _determinar_reserva("DAÑOS A TERCEROS") == 1000.0
 
-    def test_cobertura_vacia_retorna_default(self):
+    def test_vacia_retorna_1000(self):
         assert _determinar_reserva("") == 1000.0
+
+
+# ---------------------------------------------------------------------------
+# Helpers de fixture
+# ---------------------------------------------------------------------------
+
+def _make_reclamo_data() -> DatosReclamo:
+    return DatosReclamo(
+        case_number="02195167",
+        numero_poliza="02-93-1142585-1",
+        siniestro=DatosSiniestro(
+            fecha="2026-04-16",
+            hora="12:14",
+            lugar="Al frente del colegio San Vicente de Paul, Santiago.",
+            tipo="Colision",
+            descripcion="Venía hacia el colegio...",
+            fecha_recibo_documentos=date.today().isoformat(),
+        ),
+        conductor=DatosConductor(
+            cedula="4-218-210",
+            nombre="Cristobal",
+            apellido="cedeño marrone",
+            sexo="M",
+            edad=65,
+            responsabilidad="Pendiente",
+        ),
+        poliza=DatosPoliza(
+            cobertura="Colisión o Vuelco",
+            reserva=1300.0,
+        ),
+        ajustador_interno=158,
+    )
