@@ -1,14 +1,15 @@
 """
-Lambda Tool: review_historial_crm
-Acción: F2 — Revisar historial del caso en Salesforce CRM
+Lambda Tool: extract_expediente_crm
+Accion: F6-CRM — Extraer documentos adjuntos del caso desde Salesforce CRM
 
-Invocada por el Agente Analista (Bedrock Action Group).
-Navega al caso de Salesforce por sf_record_id y retorna:
-  - Metadata del caso (estado, asunto, cuenta, fecha)
-  - Comentarios recientes del activity timeline
+Invocada por el Agente Expediente (Bedrock Action Group).
+Navega a la vista CombinedAttachments del caso y retorna la lista de
+documentos con título, tipo, fecha y tamaño.
 
-El agente usa esta información para decidir si el caso está listo
-para cerrar o requiere acción adicional.
+El output es compatible con validate_documentos: el campo imagen_count
+refleja el total de adjuntos, permitiendo que la validacion de existencia
+funcione sin cambios independientemente de si los documentos vienen del
+SIC o del CRM.
 """
 import json
 import logging
@@ -16,7 +17,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-_ACTION_GROUP = "agente-crm-actions"
+_ACTION_GROUP = "agente-expediente-actions"
 
 
 def lambda_handler(event, context):
@@ -25,30 +26,28 @@ def lambda_handler(event, context):
 
     El agente invoca esta función con:
     {
-        "actionGroup": "agente-crm-actions",
-        "function": "review_historial_crm",
+        "actionGroup": "agente-expediente-actions",
+        "function": "extract_expediente_crm",
         "parameters": [
             {"name": "case_number", "type": "string", "value": "CF0975"}
         ]
     }
     """
-    function_name = event.get("function", "review_historial_crm")
+    function_name = event.get("function", "extract_expediente_crm")
 
     try:
         _validate_env_vars()
         case_number = _extraer_parametro(event, "case_number")
-        resultado = _process(case_number)
-        return _format_response(function_name, resultado)
+        expediente = _process(case_number)
+        return _format_response(function_name, expediente)
 
     except Exception as exc:
-        logger.error("Error en review_historial_crm", extra={"error": str(exc)})
+        logger.error("Error en extract_expediente_crm", extra={"error": str(exc)})
         return _format_error(function_name, str(exc))
 
 
 def _validate_env_vars():
     required = ["SSM_SF_COOKIES_PATH"]
-    # SSM_SF_USERNAME_PATH, SSM_SF_PASSWORD_PATH, SF_LOGIN_URL son opcionales:
-    # solo se usan cuando la sesion expira y se necesita re-login automatico.
     missing = [v for v in required if not os.environ.get(v)]
     if missing:
         raise EnvironmentError(f"Variables de entorno faltantes: {missing}")
@@ -63,20 +62,20 @@ def _extraer_parametro(event: dict, nombre: str) -> str:
 
 def _process(case_number: str) -> dict:
     # Import local para no bloquear tests sin Playwright instalado
-    from src.tools.review_historial_crm.infrastructure.salesforce_case_scraper import (
-        SalesforceCaseScraper,
+    from src.tools.extract_expediente_crm.infrastructure.salesforce_attachments_scraper import (
+        SalesforceAttachmentsScraper,
     )
 
-    scraper = SalesforceCaseScraper(
+    scraper = SalesforceAttachmentsScraper(
         ssm_cookies_path=os.environ["SSM_SF_COOKIES_PATH"],
         ssm_username_path=os.environ.get("SSM_SF_USERNAME_PATH"),
         ssm_password_path=os.environ.get("SSM_SF_PASSWORD_PATH"),
         sf_login_url=os.environ.get("SF_LOGIN_URL"),
     )
-    return scraper.obtener_historial(case_number)
+    return scraper.obtener_documentos(case_number)
 
 
-def _format_response(function_name: str, historial: dict) -> dict:
+def _format_response(function_name: str, expediente: dict) -> dict:
     return {
         "actionGroup": _ACTION_GROUP,
         "function": function_name,
@@ -84,7 +83,7 @@ def _format_response(function_name: str, historial: dict) -> dict:
             "responseBody": {
                 "TEXT": {
                     "body": json.dumps(
-                        {"historial": historial},
+                        {"expediente": expediente},
                         ensure_ascii=False,
                     )
                 }

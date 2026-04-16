@@ -2,18 +2,21 @@
 Cliente HTTP para el SIC REST API (Claims SIC / ConnectAssistance).
 
 Flujo real (4 requests, sin Playwright):
-  1. POST /api/v1/users/auth          -> idToken (Cognito JWT) + sub (UUID)
+  1. POST /api/v1/users/auth          -> accessToken (Cognito JWT) + sub (UUID)
   2. GET  /api/v1/users/{sub}         -> userCompanyID (int), codPais — con API key
   3. GET  /api/v2/events/search       -> lista de eventos por placa (userId=int, countryCode, page)
   4. GET  /api/v1/images/PAN/all/{eventRecord} -> URLs firmadas S3 por seccion
 
 Auth headers:
   Paso 1-2: Authorization: key_c5b4... (API key fija, hardcodeada en bundle JS)
-  Paso 3-4: Authorization: Bearer {idToken}
+  Paso 3-4: Authorization: Bearer {accessToken}
+
+URL base leida desde la variable de entorno SIC_API_BASE_URL.
 """
 import base64
 import json
 import logging
+import os
 from datetime import datetime
 
 import requests
@@ -22,11 +25,11 @@ from src.shared.sic_api.sic_api_session import SICApiSession
 
 logger = logging.getLogger(__name__)
 
-_SIC_API_BASE   = "https://api-bkp.claims-sic.apps-connectassistance.com"
-_AUTH_URL       = f"{_SIC_API_BASE}/api/v1/users/auth"
-_USER_URL       = f"{_SIC_API_BASE}/api/v1/users"
-_SEARCH_URL     = f"{_SIC_API_BASE}/api/v2/events/search"
-_IMAGES_URL     = f"{_SIC_API_BASE}/api/v1/images/PAN/all"
+_SIC_API_BASE_DEFAULT = "https://api-bkp.claims-sic.apps-connectassistance.com"
+
+
+def _base_url() -> str:
+    return os.environ.get("SIC_API_BASE_URL", _SIC_API_BASE_DEFAULT).rstrip("/")
 
 # API key fija — hardcodeada en el bundle JS del app (sic.connectasistencia.com)
 _API_KEY = "key_c5b4ad82c99e7abf75055d4095ba74c49632bf209b75f844fb2609d1e5900c17"
@@ -45,15 +48,15 @@ class SICApiClient:
         Returns:
             {
                 "placa": str,
-                "evento_id": str,          # eventRecord del evento mas reciente
+                "evento_id": str,
                 "fecha_evento": str,
                 "imagen_count": int,
                 "imagenes": [{"nombre": str, "url": str, "seccion_id": int}, ...]
             }
         """
-        id_token, sub = self._autenticar()
+        access_token, sub = self._autenticar()
         user_company_id, country_code = self._obtener_datos_usuario(sub)
-        headers = self._bearer_headers(id_token)
+        headers = self._bearer_headers(access_token)
 
         evento = self._buscar_evento_reciente(placa, user_company_id, country_code, headers)
         if not evento:
@@ -75,27 +78,53 @@ class SICApiClient:
         )
 
         return {
-            "placa":         placa,
-            "evento_id":     event_record,
-            "fecha_evento":  fecha_evento,
-            "imagen_count":  len(imagenes),
-            "imagenes":      imagenes,
+            "placa":        placa,
+            "evento_id":    event_record,
+            "fecha_evento": fecha_evento,
+            "imagen_count": len(imagenes),
+            "imagenes":     imagenes,
         }
+
+    def obtener_imagenes_por_expediente(self, placa: str, expediente: str) -> list[dict]:
+        """
+        Obtiene las imagenes del expediente especifico (eventRecord == expediente).
+
+        A diferencia de obtener_expediente(), no busca el mas reciente sino el que
+        coincide exactamente con el numero de expediente recibido del orquestador.
+
+        Args:
+            placa:      placa del vehiculo asegurado
+            expediente: numero de expediente (= eventRecord en SIC)
+
+        Returns:
+            [{"nombre": str, "url": str, "seccion_id": int}, ...]
+
+        Raises:
+            ValueError: si no existe ningun evento con ese eventRecord para la placa.
+        """
+        access_token, sub = self._autenticar()
+        user_company_id, country_code = self._obtener_datos_usuario(sub)
+        headers = self._bearer_headers(access_token)
+
+        self._buscar_evento_por_expediente(placa, expediente, user_company_id, country_code, headers)
+        imagenes = self._obtener_imagenes(expediente, headers)
+
+        logger.info(
+            "Imagenes SIC obtenidas por expediente",
+            extra={"placa": placa, "expediente": expediente, "total": len(imagenes)},
+        )
+        return imagenes
 
     # ------------------------------------------------------------------
     # Internos
     # ------------------------------------------------------------------
 
     def _autenticar(self) -> tuple[str, str]:
-        """
-        POST /api/v1/users/auth → (accessToken, sub).
-
-        El interceptor del app usa accessToken (no idToken) para las llamadas
-        post-auth, junto con X-User-Type: sic-user.
-        """
+        """POST /api/v1/users/auth → (accessToken, sub)."""
+        base = _base_url()
         username, password = self._session.load_credentials()
         resp = requests.post(
-            _AUTH_URL,
+            f"{base}/api/v1/users/auth",
             json={"username": username, "password": password, "mfaCode": None, "challengeSession": None},
             headers=_API_KEY_HEADERS,
             timeout=15,
@@ -112,13 +141,10 @@ class SICApiClient:
         return access_token, sub
 
     def _obtener_datos_usuario(self, sub: str) -> tuple[int, str]:
-        """
-        GET /api/v1/users/{sub} → (userCompanyID, codPais).
-        Retorna el ID numerico del usuario y su codigo de pais.
-        Requiere API key (no Bearer).
-        """
+        """GET /api/v1/users/{sub} → (userCompanyID, codPais)."""
+        base = _base_url()
         resp = requests.get(
-            f"{_USER_URL}/{sub}",
+            f"{base}/api/v1/users/{sub}",
             headers=_API_KEY_HEADERS,
             timeout=10,
         )
@@ -138,9 +164,36 @@ class SICApiClient:
         self, placa: str, user_id: int, country_code: str, headers: dict
     ) -> dict | None:
         """
-        GET /api/v2/events/search filtrando por placa asegurada.
-        Retorna el evento con la fecha mas reciente, o None si no hay resultados.
+        Retorna el evento con la fecha mas reciente para una placa, o None si no hay resultados.
         """
+        eventos = self._listar_eventos(placa, user_id, country_code, headers)
+        if not eventos:
+            return None
+        return max(eventos, key=lambda e: _parsear_fecha(e.get("eventDate", "")))
+
+    def _buscar_evento_por_expediente(
+        self, placa: str, expediente: str, user_id: int, country_code: str, headers: dict
+    ) -> dict:
+        """
+        Retorna el evento cuyo eventRecord coincide con expediente.
+
+        Raises:
+            ValueError: si no se encuentra el expediente para esa placa.
+        """
+        eventos = self._listar_eventos(placa, user_id, country_code, headers)
+        for evento in eventos:
+            if str(evento.get("eventRecord", "")) == str(expediente):
+                return evento
+        raise ValueError(
+            f"Expediente '{expediente}' no encontrado en SIC para la placa '{placa}'. "
+            f"Eventos disponibles: {[e.get('eventRecord') for e in eventos]}"
+        )
+
+    def _listar_eventos(
+        self, placa: str, user_id: int, country_code: str, headers: dict
+    ) -> list[dict]:
+        """GET /api/v2/events/search — retorna lista de eventos para la placa."""
+        base = _base_url()
         params = {
             "filterType":  "INSURED_PLATE",
             "filterText":  placa,
@@ -150,31 +203,22 @@ class SICApiClient:
             "page":        1,
             "userId":      user_id,
         }
-        resp = requests.get(_SEARCH_URL, params=params, headers=headers, timeout=15)
+        resp = requests.get(f"{base}/api/v2/events/search", params=params, headers=headers, timeout=15)
         resp.raise_for_status()
         body = resp.json()
 
-        # La respuesta viene en body.data.response.events
         data = body.get("data") or {}
         if isinstance(data, dict):
             response = data.get("response") or {}
-            eventos = response.get("events") or data.get("events") or []
+            return response.get("events") or data.get("events") or []
         elif isinstance(data, list):
-            eventos = data
-        else:
-            eventos = []
-
-        if not eventos:
-            return None
-
-        return max(eventos, key=lambda e: _parsear_fecha(e.get("eventDate", "")))
+            return data
+        return []
 
     def _obtener_imagenes(self, event_record: str, headers: dict) -> list[dict]:
-        """
-        GET /api/v1/images/PAN/all/{eventRecord}?forceUpdate=true
-        Retorna lista de {nombre, url, seccion_id}.
-        """
-        url  = f"{_IMAGES_URL}/{event_record}"
+        """GET /api/v1/images/PAN/all/{eventRecord}?forceUpdate=true"""
+        base = _base_url()
+        url  = f"{base}/api/v1/images/PAN/all/{event_record}"
         resp = requests.get(url, params={"forceUpdate": "true"}, headers=headers, timeout=20)
         resp.raise_for_status()
         body = resp.json()

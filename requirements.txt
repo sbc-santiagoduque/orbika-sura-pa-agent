@@ -1,2 +1,6 @@
 boto3>=1.34.0
 playwright>=1.44.0
+# Login transversal Salesforce — instalar con:
+#   pip install -e "C:/Users/Subocol/Desktop/Nueva carpeta/orbika-sura-pa-login"
+# Para Lambda packaging: copiar src/login/ al bundle de la lambda.
+orbika-sura-pa-login @ file:///C:/Users/Subocol/Desktop/Nueva%20carpeta/orbika-sura-pa-login

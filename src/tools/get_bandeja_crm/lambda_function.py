@@ -42,6 +42,8 @@ def lambda_handler(event, context):
 
 def _validate_env_vars():
     required = ["SSM_SF_COOKIES_PATH", "SF_REPORT_URL"]
+    # SSM_SF_USERNAME_PATH, SSM_SF_PASSWORD_PATH, SF_LOGIN_URL son opcionales:
+    # solo se usan cuando la sesion expira y se necesita re-login automatico.
     missing = [v for v in required if not os.environ.get(v)]
     if missing:
         raise EnvironmentError(f"Variables de entorno faltantes: {missing}")
@@ -54,6 +56,9 @@ def _process() -> list[dict]:
     scraper = SalesforceScraper(
         ssm_cookies_path=os.environ["SSM_SF_COOKIES_PATH"],
         report_url=os.environ["SF_REPORT_URL"],
+        ssm_username_path=os.environ.get("SSM_SF_USERNAME_PATH"),
+        ssm_password_path=os.environ.get("SSM_SF_PASSWORD_PATH"),
+        sf_login_url=os.environ.get("SF_LOGIN_URL"),
     )
     return scraper.obtener_bandeja()
 
