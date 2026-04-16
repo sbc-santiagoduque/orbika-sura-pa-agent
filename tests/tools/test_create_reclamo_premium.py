@@ -440,8 +440,14 @@ class TestDeterminarTipoSiniestro:
     def test_vuelco_mapea_a_colision(self):
         assert _determinar_tipo_siniestro("vuelco del vehículo") == "Colision"
 
+    def test_roce_desde_relato_conductor(self):
+        # Caso real EJ1949/5134134: coverages=[] → inferir desde storyDetail
+        assert _determinar_tipo_siniestro(
+            "lo rocé levemente, ya que no tuve el espacio suficiente para pasar"
+        ) == "Colision"
+
     def test_desconocido_retorna_otro(self):
-        assert _determinar_tipo_siniestro("daños mecánicos en la transmisión") == "Otro"
+        assert _determinar_tipo_siniestro("falla eléctrica en el sistema de frenos") == "Otro"
 
     def test_vacio_retorna_otro(self):
         assert _determinar_tipo_siniestro("") == "Otro"

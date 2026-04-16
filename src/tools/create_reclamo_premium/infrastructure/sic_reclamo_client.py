@@ -26,6 +26,7 @@ Nota sobre IndResponsible:
 """
 import logging
 import os
+import unicodedata
 
 import requests
 
@@ -47,10 +48,13 @@ _RESERVAS = {
 _RESERVA_DEFAULT = 1000.0
 
 # Inferencia de tipo de siniestro desde nombre de cobertura o descripción
+# Incluye términos de la cobertura Y del relato del conductor (storyDetail)
 _TIPOS_SINIESTRO = {
-    "Colision":  ["colisi", "vuelco", "choque", "impacto"],
-    "Robo":      ["robo", "hurto", "sustraccion"],
-    "Incendio":  ["incendio", "fuego", "quemado"],
+    "Colision":  ["colisi", "vuelco", "choque", "impacto", "roce", "rozo",
+                  "golpe", "golp", "raspó", "raspo", "rasgu", "daño", "dano",
+                  "estrello", "colision", "accidente", "estacion", "vía"],
+    "Robo":      ["robo", "hurto", "sustraccion", "robaron", "hurtaron"],
+    "Incendio":  ["incendio", "fuego", "quemado", "incendi"],
 }
 
 # Mapping de driverGender (código numérico SIC → M/F)
@@ -62,13 +66,19 @@ def _base_url() -> str:
     return os.environ.get("SIC_API_BASE_URL", _SIC_API_BASE_DEFAULT).rstrip("/")
 
 
+def _normalizar(texto: str) -> str:
+    """Convierte a minúsculas y elimina tildes para comparación robusta."""
+    nfkd = unicodedata.normalize("NFKD", texto.lower())
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+
 def _determinar_tipo_siniestro(texto: str) -> str:
     """
     Infiere el tipo de siniestro desde el nombre de cobertura o descripción.
 
     Retorna: "Colision" | "Robo" | "Incendio" | "Otro"
     """
-    texto_lower = (texto or "").lower()
+    texto_lower = _normalizar(texto or "")
     for tipo, palabras in _TIPOS_SINIESTRO.items():
         if any(p in texto_lower for p in palabras):
             return tipo
