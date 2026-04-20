@@ -11,3 +11,5 @@ agente-env/
 .venv/
 venv/
 *.zip
+bedrock-logs.md
+scripts/*.png
