@@ -13,3 +13,4 @@ venv/
 *.zip
 bedrock-logs.md
 scripts/*.png
+.claude
