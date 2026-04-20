@@ -36,7 +36,8 @@ tests/
     └── test_create_reclamo_premium.py  # 49 tests unitarios (todos passing)
 
 scripts/
-└── test_sic_reclamo_real.py            # Test de integración real vs SIC API
+├── test_sic_reclamo_real.py            # Test de integración real vs SIC API
+└── test_rdp_connection.py              # Test de conexión RDP automatizada
 ```
 
 ---
@@ -165,13 +166,87 @@ Output esperado con evento EJ1949 / 5134134:
 
 ---
 
+---
+
+## Phase B — Automatización Premium (escritorio remoto)
+
+**Estado:** Conexión RDP automatizada validada (2026-04-20).
+
+Premium es una aplicación de escritorio que corre en un servidor remoto accedido
+via RDP. La automatización usa `PyAutoGUI` + `pywinauto` corriendo en la máquina
+local (o futura EC2 Windows).
+
+### Stack de automatización de escritorio
+
+| Librería | Rol |
+|---|---|
+| `pyautogui` | Screenshot, click por coordenadas, detección por imagen |
+| `pygetwindow` | Encontrar y enfocar ventanas por título |
+| `pywinauto` | Acceso directo a controles Win32 (requiere admin) |
+| `keyboard` | Envío de teclas especiales |
+
+### Flujo de conexión RDP (`scripts/test_rdp_connection.py`)
+
+```
+cmdkey guarda credenciales en Windows Credential Manager
+    ↓
+mstsc /v:HOST lanzado via subprocess
+    ↓
+"Seguridad de Windows" → pywinauto type_keys (requiere admin)
+    ↓
+Certificado RDP → Left+Enter (foco en "No", Left mueve a "Sí")
+    ↓
+"HOST - Conexión a Escritorio remoto" detectado → conectado
+    ↓
+Screenshot de verificación
+    ↓
+cmdkey limpia credenciales
+```
+
+### Variables de entorno para RDP (`.env`)
+
+```env
+RDP_HOST=172.16.1.77
+RDP_USERNAME=.\PROYECTO_DMS
+RDP_PASSWORD=tu_password
+```
+
+### Uso
+
+```bash
+# Requiere terminal como Administrador
+python scripts/test_rdp_connection.py
+```
+
+### Hallazgos clave RDP + Windows 11 (2026-04-20)
+
+- `Alt+S` dispara el **Snipping Tool** de Windows 11 — nunca usarlo como atajo
+- El diálogo "Seguridad de Windows" bloquea clipboard y `keyboard.write()` — necesita `pywinauto` con admin
+- El botón default del diálogo de certificado es **"No"** — usar `Left+Enter` para llegar a "Sí"
+- `pywinauto` requiere correr como **Administrador** para acceder a diálogos de seguridad del sistema
+- En producción (EC2): usar Windows Task Scheduler con "Ejecutar con privilegios elevados"
+
+### Arquitectura futura (EC2)
+
+```
+Lambda Phase A          SQS             EC2 Windows (admin)
+─────────────────  →  ──────────  →   ──────────────────────────
+DatosReclamo JSON       cola            PyAutoGUI + pywinauto
+                                        RDP → Premium
+                                        Llena formulario
+                                        Confirma apertura reclamo
+```
+
+---
+
 ## Pendientes
 
-- [ ] **Reserva cuando `coverages: []`** — inferir reserva desde `tipo` además del nombre de cobertura
+- [ ] **Automatizar apertura de reclamo en Premium** — navegar a Premium dentro del RDP, llenar formulario con `DatosReclamo`
+- [ ] **Credenciales RDP sin diálogo** — resolver `cmdkey` para que mstsc conecte directo (evitar diálogo Seguridad de Windows)
+- [ ] **Reserva cuando `coverages: []`** — inferir desde `tipo` cuando cobertura vacía
 - [ ] **Confirmar `IndResponsible`** — valores "1"/"2" con equipo de operaciones Sura
-- [ ] **`ConsultaIntegralScraper`** — implementar selector mapping (requiere VPN CLI + FortiClient)
-- [ ] **Phase B** — Premium Oracle Forms RPA (apertura del reclamo en Premium)
-- [ ] **Integrar a Bedrock agent** — registrar como action group / tool en el agente analista
+- [ ] **`ConsultaIntegralScraper`** — implementar (requiere VPN)
+- [ ] **Integrar a Bedrock agent** — registrar como action group
 
 ---
 
@@ -180,4 +255,4 @@ Output esperado con evento EJ1949 / 5134134:
 | Branch | Descripción |
 |---|---|
 | `main` | Base estable |
-| `AAP-RPA1-create-reclamo-premium` | Tool de recolección de datos (Phase A) — activo |
+| `AAP-RPA1-create-reclamo-premium` | Phase A (datos SIC) + base RDP Phase B — activo |
