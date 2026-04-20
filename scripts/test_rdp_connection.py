@@ -188,18 +188,27 @@ def _escritorio_listo(host: str, username: str, password: str,
             _manejar_dialogo_credenciales(username, password)
             continue
 
-        # Descartar overlay de captura de Windows 11 ("Click o arrastre para
-        # tomar una captura...") — no tiene título de ventana, se cierra con Escape
+        # Descartar overlay de captura de Windows 11
         _descartar_overlay_captura()
 
-        # Detectar diálogo de certificado — "¿Desea conectarse de todas formas?"
+        # Detectar advertencia de certificado (nuevo formato "Advertencia de seguridad...")
+        advertencia = [
+            t for t in ventanas
+            if "Advertencia de seguridad" in t or "Security Warning" in t
+        ]
+        if advertencia:
+            print(f"  → Advertencia certificado: '{advertencia[0]}'")
+            _manejar_dialogo_certificado()
+            continue
+
+        # Detectar diálogo de certificado clásico
         if _manejar_dialogo_certificado():
             continue
 
         # Diálogo inicial de mstsc (aún conectando)
         conectando = [
             t for t in ventanas
-            if "Conexión a Escritorio remoto" in t or "Remote Desktop Connection" in t
+            if "Escritorio remoto" in t or "Remote Desktop" in t
         ]
         estado = f"conectando... '{conectando[0]}'" if conectando else "esperando mstsc..."
         print(f"  → Intento {i+1}/{intentos} — {estado}")
@@ -230,57 +239,55 @@ def _descartar_overlay_captura() -> None:
 
 def _manejar_dialogo_certificado() -> bool:
     """
-    Detecta el diálogo de advertencia de certificado de mstsc y hace click en Sí.
-
-    Aparece cuando el certificado del servidor RDP no está en el almacén de
-    confianza local. Título: 'Conexión a Escritorio remoto'.
+    Maneja dos tipos de diálogos de advertencia de certificado RDP:
+      - "Advertencia de seguridad de conexión a Escritorio remoto" → botón "Conectar"
+      - "Conexión a Escritorio remoto" → botón "Sí"
     Retorna True si encontró y manejó el diálogo.
     """
     import pyautogui
     import pygetwindow as gw
 
+    _TITULOS_CERT = (
+        "Advertencia de seguridad de conexión a Escritorio remoto",
+        "Remote Desktop Connection Security Warning",
+        "Conexión a Escritorio remoto",
+        "Remote Desktop Connection",
+    )
+    _BOTONES_ACEPTAR = ("conectar", "connect", "sí", "si", "yes")
+
     ventanas = gw.getAllTitles()
-    dialogo = [
-        t for t in ventanas
-        if t in ("Conexión a Escritorio remoto", "Remote Desktop Connection")
-    ]
+    dialogo = [t for t in ventanas if t in _TITULOS_CERT]
     if not dialogo:
         return False
+
+    titulo = dialogo[0]
+    print(f"  → Diálogo certificado: '{titulo}'")
 
     try:
         from pywinauto import Application
         app = Application(backend="win32").connect(
-            title=dialogo[0], timeout=2, top_level_only=True
+            title=titulo, timeout=2, top_level_only=True
         )
         dlg = app.top_window()
-
-        # Intentar click en "Sí" / "Yes"
-        # Imprimir botones disponibles para debug y buscar "Sí"
         botones = dlg.children(class_name="Button")
         nombres = [b.window_text() for b in botones]
         print(f"  → Botones del diálogo certificado: {nombres}")
-
         for boton in botones:
-            nombre = boton.window_text()
-            if nombre.lower() in ("sí", "si", "yes"):
+            if boton.window_text().lower() in _BOTONES_ACEPTAR:
                 boton.click()
-                print(f"  → Certificado: click en '{nombre}'")
+                print(f"  → Certificado: click en '{boton.window_text()}'")
                 time.sleep(1.0)
                 return True
     except Exception as e:
         print(f"  → pywinauto falló: {e}")
 
-    # Fallback: enfocar + Left arrow (mueve foco de "No" → "Sí" en el grupo
-    # de botones) + Enter. El orden del diálogo es [Sí][No][Ver certificado]
-    # con foco en "No" — Left va a "Sí", Tab va a "Ver certificado".
+    # Fallback: Enter directo ("Conectar"/"Sí" suele tener el foco por defecto)
     try:
-        win = gw.getWindowsWithTitle(dialogo[0])[0]
+        win = gw.getWindowsWithTitle(titulo)[0]
         win.activate()
         time.sleep(0.5)
-        pyautogui.hotkey("left")   # No → Sí
-        time.sleep(0.2)
         pyautogui.hotkey("enter")
-        print("  → Certificado: Left+Enter enviado (Sí)")
+        print(f"  → Certificado: Enter (aceptar)")
         time.sleep(1.0)
         return True
     except Exception:

@@ -13,4 +13,8 @@ venv/
 *.zip
 bedrock-logs.md
 scripts/*.png
+scripts/capturas/
+scripts/_conexion_temporal.rdp
+*.png
+!docs/template_server_premium.png
 .claude
