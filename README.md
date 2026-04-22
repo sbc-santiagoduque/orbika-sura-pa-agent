@@ -203,20 +203,31 @@ Screenshot de verificación
 cmdkey limpia credenciales
 ```
 
-### Variables de entorno para RDP (`.env`)
+### Variables de entorno para RDP + Premium (`.env`)
 
 ```env
 RDP_HOST=172.16.1.77
 RDP_USERNAME=.\PROYECTO_DMS
-RDP_PASSWORD=tu_password
+RDP_PASSWORD=tu_password_rdp
+
+PREMIUM_USERNAME=usuario_oracle
+PREMIUM_PASSWORD=tu_password_premium
 ```
 
 ### Uso
 
 ```bash
 # Requiere terminal como Administrador
-python scripts/test_rdp_connection.py
+python scripts/open_premium.py                # flujo completo: RDP → Premium → Login
+python scripts/open_premium.py --no-rdp       # RDP ya activo → Premium + Login
+python scripts/open_premium.py --no-premium   # Premium ya abierto → solo Login Oracle Forms
+python scripts/open_premium.py --step login   # solo pasos 11-16 (debug login aislado)
 ```
+
+### Template opcional para detección precisa del diálogo
+
+Crea `docs/template_premium_conexion.png` con un crop del título "Conexión" del diálogo
+Oracle Forms. Sin él, el script usa detección por estabilidad de pantalla (fallback automático).
 
 ### Hallazgos clave RDP + Windows 11 (2026-04-20)
 
@@ -241,7 +252,8 @@ DatosReclamo JSON       cola            PyAutoGUI + pywinauto
 
 ## Pendientes
 
-- [ ] **Automatizar apertura de reclamo en Premium** — navegar a Premium dentro del RDP, llenar formulario con `DatosReclamo`
+- [ ] **Login Oracle Forms implementado (pasos 11-16)** — llenar Usuario/Contraseña + Conectar ✅ pendiente de prueba real
+- [ ] **Navegar a reclamos en Premium** — después del login, navegar al módulo de reclamos y llenar formulario con `DatosReclamo`
 - [ ] **Credenciales RDP sin diálogo** — resolver `cmdkey` para que mstsc conecte directo (evitar diálogo Seguridad de Windows)
 - [ ] **Reserva cuando `coverages: []`** — inferir desde `tipo` cuando cobertura vacía
 - [ ] **Confirmar `IndResponsible`** — valores "1"/"2" con equipo de operaciones Sura

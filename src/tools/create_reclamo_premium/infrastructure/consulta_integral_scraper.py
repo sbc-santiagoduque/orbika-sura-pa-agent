@@ -1,99 +1,247 @@
 """
-Scraper de Consulta Integral para obtener número de póliza y cobertura.
+Cliente REST para Consulta Integral.
 
-Consulta Integral es un web app que requiere VPN activa (FortiClient).
-Provee: número de póliza, coberturas, suma asegurada, datos del vehículo.
+Endpoints descubiertos en inspección de red (2026-04-21):
 
-Estado actual:
-  PHASE A — Interfaz definida, implementación pendiente de:
-    1. Confirmación de CLI VPN (FortiClient) para automatización
-    2. Mapeo de selectores HTML de Consulta Integral
+  GET /api/api/AseguradoPlaca?id={placa}
+      → [{id, Nombre, identificación}]
 
-  Para desarrollo y pruebas sin VPN, usar ConsultaIntegralScraperStub.
+  GET /api/api/Polizas?id={cedula}&placasn={placa}&Valor=undefined
+      → [{id, CORE, Póliza, Solución, Vigi, Vigf, Estado, Suma, Saldo, Siniestros}]
 
-Cuando esté implementado, el flujo será:
-  1. Conectar VPN via FortiClient CLI (si no está activa)
-  2. Playwright: navegar a CI → buscar por placa → extraer póliza + coberturas
-  3. Retornar DatosPoliza estructurado
+Acceso: red interna únicamente (VPN FortiClient activa o VPC AWS con acceso a 10.240.3.x).
+Sin autenticación adicional.
 
-TODO: implementar _navegar_y_extraer() con Playwright una vez:
-  - FortiClient CLI esté confirmado (en investigación)
-  - Selectores de CI estén mapeados (requiere sesión con acceso a VPN)
+Notas:
+  - CI no expone nombre de cobertura — ese campo viene de SIC (coverages[0].coverageName).
+  - Vigi/Vigf en formato MM/DD/YYYY (observado: "07/01/2026").
+  - Cuando hay varios asegurados para una placa, se consultan pólizas de todos
+    y se selecciona la que cubre la fecha del siniestro.
 """
 import logging
+from datetime import date, datetime
+
+import requests as _requests
+
+import json as _json
 
 logger = logging.getLogger(__name__)
 
+_VIGI_FMT = "%m/%d/%Y"  # Formato observado en la API: "07/01/2026"
 
-class ConsultaIntegralScraper:
+
+def _parse_json_response(data) -> list:
     """
-    Extrae número de póliza y coberturas desde Consulta Integral.
+    CI devuelve el body como string JSON dentro de JSON:
+      resp.json() → '[{"id":1,...}]'   ← string, no lista
 
-    Args:
-        ci_base_url: URL base de Consulta Integral (desde variable de entorno CI_BASE_URL).
+    Si data ya es lista, la retorna directamente.
+    Si es string, hace un segundo json.loads().
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, str):
+        parsed = _json.loads(data)
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _parse_vigi(fecha_str: str) -> date | None:
+    """Parsea una fecha de vigencia MM/DD/YYYY a date. Retorna None si no es válida."""
+    if not fecha_str:
+        return None
+    try:
+        return datetime.strptime(fecha_str, _VIGI_FMT).date()
+    except ValueError:
+        return None
+
+
+class ConsultaIntegralClient:
+    """
+    Cliente REST para Consulta Integral.
+
+    Encadena AseguradoPlaca + Polizas y selecciona la póliza cuya vigencia
+    cubre la fecha del siniestro.
     """
 
-    def __init__(self, ci_base_url: str):
-        self._base_url = ci_base_url
+    def __init__(self, ci_base_url: str, timeout: int = 10):
+        self._base_url = ci_base_url.rstrip("/")
+        self._timeout = timeout
 
-    def obtener_datos_poliza(self, placa: str) -> dict:
+    def obtener_datos_poliza(self, placa: str, fecha_siniestro: str | None = None) -> dict:
         """
-        Navega a Consulta Integral y extrae los datos de póliza para la placa.
+        Retorna datos de la póliza vigente a la fecha del siniestro para la placa.
 
         Args:
-            placa: Placa del vehículo asegurado.
+            placa:           Placa del vehículo (ej. "ED1370").
+            fecha_siniestro: ISO "YYYY-MM-DD". Se usa para seleccionar la póliza
+                             cuya vigencia cubre esa fecha. Si es None, retorna
+                             la primera póliza disponible (preferendo Estado=Vigente).
 
         Returns:
             {
-                "numero_poliza": str,   — ej. "02-37-1252419-0"
-                "cobertura": str,       — ej. "POR COLISION O VUELCO"
-                "suma_asegurada": float — ej. 25000.0
+                "numero_poliza":  "02-98-1246363-0",
+                "cobertura":      "",           — CI no expone cobertura
+                "suma_asegurada": 12400.0,
+                "estado":         "Vigente",
+                "vigi":           "2026-07-01",
+                "vigf":           "2027-07-01",
             }
 
         Raises:
-            NotImplementedError: mientras la implementación esté pendiente.
-            RuntimeError: si Consulta Integral no es accesible (VPN inactiva).
+            RuntimeError: si CI no es accesible o no hay póliza para la placa.
         """
-        # TODO: implementar con Playwright cuando FortiClient CLI esté confirmado
-        #
-        # Flujo esperado:
-        #   page = await browser.new_page()
-        #   await page.goto(f"{self._base_url}/consulta")
-        #   await page.fill("#placa-input", placa)
-        #   await page.click("#buscar-btn")
-        #   poliza = await page.inner_text("#numero-poliza")
-        #   cobertura = await page.inner_text(".cobertura-activa")
-        #   ...
-        #
-        raise NotImplementedError(
-            "ConsultaIntegralScraper pendiente de implementación. "
-            "Requiere FortiClient CLI activo y selectores HTML mapeados. "
-            "Usa ConsultaIntegralScraperStub para desarrollo."
+        fecha_dt = self._parse_fecha_siniestro(fecha_siniestro)
+
+        asegurados = self._obtener_asegurados(placa)
+        if not asegurados:
+            raise RuntimeError(f"CI: no se encontraron asegurados para placa '{placa}'")
+
+        polizas = self._obtener_polizas_todos(asegurados, placa)
+        if not polizas:
+            raise RuntimeError(f"CI: no se encontraron pólizas para placa '{placa}'")
+
+        poliza = self._seleccionar_poliza(polizas, fecha_dt, placa)
+
+        logger.info(
+            "CI: póliza seleccionada",
+            extra={
+                "placa":           placa,
+                "fecha_siniestro": fecha_siniestro,
+                "numero_poliza":   poliza["Póliza"],
+                "estado":          poliza.get("Estado", ""),
+            },
         )
 
+        return {
+            "numero_poliza":  poliza["Póliza"],
+            "cobertura":      "",
+            "suma_asegurada": float(poliza.get("Suma") or 0),
+            "estado":         poliza.get("Estado", ""),
+            "vigi":           self._a_iso(poliza.get("Vigi", "")),
+            "vigf":           self._a_iso(poliza.get("Vigf", "")),
+        }
 
-class ConsultaIntegralScraperStub:
+    # ------------------------------------------------------------------
+    # Requests HTTP
+    # ------------------------------------------------------------------
+
+    def _obtener_asegurados(self, placa: str) -> list[dict]:
+        """GET /api/api/AseguradoPlaca?id={placa}"""
+        url = f"{self._base_url}/api/api/AseguradoPlaca"
+        try:
+            resp = _requests.get(url, params={"id": placa}, timeout=self._timeout)
+            resp.raise_for_status()
+            return _parse_json_response(resp.json())
+        except Exception as exc:
+            raise RuntimeError(f"CI AseguradoPlaca ({placa}): {exc}") from exc
+
+    def _obtener_polizas_cedula(self, cedula: str, placa: str) -> list[dict]:
+        """GET /api/api/Polizas?id={cedula}&placasn={placa}&Valor=undefined"""
+        url = f"{self._base_url}/api/api/Polizas"
+        try:
+            resp = _requests.get(
+                url,
+                params={"id": cedula, "placasn": placa, "Valor": "undefined"},
+                timeout=self._timeout,
+            )
+            resp.raise_for_status()
+            return _parse_json_response(resp.json())
+        except Exception as exc:
+            logger.warning("CI Polizas (cédula=%s): %s", cedula, exc)
+            return []
+
+    def _obtener_polizas_todos(self, asegurados: list[dict], placa: str) -> list[dict]:
+        """Agrega pólizas de todos los asegurados encontrados para la placa."""
+        todas = []
+        for asegurado in asegurados:
+            cedula = asegurado.get("identificación") or asegurado.get("identificacion", "")
+            if cedula:
+                todas.extend(self._obtener_polizas_cedula(cedula, placa))
+        return todas
+
+    # ------------------------------------------------------------------
+    # Selección de póliza
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_fecha_siniestro(fecha_str: str | None) -> date | None:
+        if not fecha_str:
+            return None
+        try:
+            return date.fromisoformat(fecha_str[:10])
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _seleccionar_poliza(polizas: list[dict], fecha_dt: date | None, placa: str) -> dict:
+        """
+        Selecciona la póliza correcta.
+
+        Prioridad con fecha_siniestro:
+          1. Pólizas donde Vigi ≤ fecha_siniestro ≤ Vigf
+             → dentro del grupo, Estado=Vigente primero
+          2. Si ninguna cubre la fecha, log de advertencia y retorna la primera
+             con Estado=Vigente (o la primera disponible).
+
+        Sin fecha_siniestro:
+          - Estado=Vigente primero, luego primera disponible.
+        """
+        if fecha_dt:
+            cubren = [
+                p for p in polizas
+                if _parse_vigi(p.get("Vigi", "")) is not None
+                and _parse_vigi(p.get("Vigf", "")) is not None
+                and _parse_vigi(p.get("Vigi", "")) <= fecha_dt <= _parse_vigi(p.get("Vigf", ""))
+            ]
+            if cubren:
+                cubren.sort(key=lambda p: p.get("Estado", "") != "Vigente")
+                return cubren[0]
+
+            logger.warning(
+                "CI: ninguna póliza cubre la fecha %s para placa '%s' — usando primera disponible",
+                fecha_dt, placa,
+            )
+
+        polizas_sorted = sorted(polizas, key=lambda p: p.get("Estado", "") != "Vigente")
+        return polizas_sorted[0]
+
+    @staticmethod
+    def _a_iso(fecha_str: str) -> str:
+        """Convierte 'MM/DD/YYYY' a 'YYYY-MM-DD'. Retorna '' si no es válida."""
+        dt = _parse_vigi(fecha_str)
+        return dt.isoformat() if dt else ""
+
+
+# Alias de compatibilidad con el nombre anterior
+ConsultaIntegralScraper = ConsultaIntegralClient
+
+
+class ConsultaIntegralClientStub:
     """
-    Stub para desarrollo y pruebas sin VPN.
+    Stub para tests y desarrollo sin VPN.
 
-    Retorna datos hardcodeados basados en la placa. Útil para:
-    - Tests unitarios
-    - Desarrollo local sin VPN
-    - Validar el flujo completo con datos conocidos
-
+    Retorna datos fijos sin hacer ninguna llamada HTTP.
     NO usar en producción.
     """
 
     def __init__(self, datos_fijos: dict | None = None):
         self._datos = datos_fijos or {
-            "numero_poliza": "02-37-0000000-0",
-            "cobertura":     "POR COLISION O VUELCO",
+            "numero_poliza":  "02-37-0000000-0",
+            "cobertura":      "",
             "suma_asegurada": 25000.0,
+            "estado":         "Vigente",
+            "vigi":           "2026-01-01",
+            "vigf":           "2027-01-01",
         }
 
-    def obtener_datos_poliza(self, placa: str) -> dict:
+    def obtener_datos_poliza(self, placa: str, fecha_siniestro: str | None = None) -> dict:
         logger.warning(
-            "ConsultaIntegralScraperStub activo — datos NO reales",
+            "ConsultaIntegralClientStub activo — datos NO reales",
             extra={"placa": placa},
         )
         return {**self._datos}
+
+
+# Alias de compatibilidad con el nombre anterior
+ConsultaIntegralScraperStub = ConsultaIntegralClientStub

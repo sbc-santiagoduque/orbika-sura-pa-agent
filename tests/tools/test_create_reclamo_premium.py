@@ -264,21 +264,256 @@ class TestDataCollector:
 
         assert resultado.ajustador_interno == 158
 
-    def test_poliza_fallback_a_ci_si_sic_no_tiene_noPoliza(self):
+    def test_ci_es_fuente_primaria_de_numero_poliza(self):
         sic = MagicMock()
-        evento_sin_poliza = {**EVENTO_SIC_DETAIL, "noPoliza": ""}
-        sic.obtener_datos_evento.return_value = evento_sin_poliza
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL  # SIC tiene noPoliza
 
         ci = MagicMock()
         ci.obtener_datos_poliza.return_value = {
-            "numero_poliza": "02-37-0000000-0",
-            "cobertura": "Colisión o Vuelco",
+            "numero_poliza":  "02-98-1246363-0",  # CI puede diferir de SIC
+            "cobertura":      "",
+            "suma_asegurada": 12400.0,
+            "estado":         "Vigente",
+            "vigi":           "2026-07-01",
+            "vigf":           "2027-07-01",
         }
         collector = self._make_collector(sic, ci)
 
         resultado = collector.recolectar("02195167", "EJ1949", "5134134")
 
-        assert resultado.numero_poliza == "02-37-0000000-0"
+        # Usa el número de CI, no el de SIC
+        assert resultado.numero_poliza == "02-98-1246363-0"
+        ci.obtener_datos_poliza.assert_called_once_with("EJ1949", "2026-04-16")
+
+    def test_ci_siempre_se_llama_independientemente_de_sic(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        ci = MagicMock()
+        ci.obtener_datos_poliza.return_value = {
+            "numero_poliza": "02-98-1246363-0", "cobertura": "",
+            "suma_asegurada": 0, "estado": "Vigente", "vigi": "", "vigf": "",
+        }
+        collector = self._make_collector(sic, ci)
+
+        collector.recolectar("02195167", "EJ1949", "5134134")
+
+        ci.obtener_datos_poliza.assert_called_once()
+
+    def test_ci_error_usa_noPoliza_de_sic_como_fallback(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL  # noPoliza: 02-93-1142585-1
+
+        ci = MagicMock()
+        ci.obtener_datos_poliza.side_effect = RuntimeError("CI no disponible")
+        collector = self._make_collector(sic, ci)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.numero_poliza == "02-93-1142585-1"
+
+    def test_ci_error_y_sic_sin_poliza_retorna_vacio(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = {**EVENTO_SIC_DETAIL, "noPoliza": ""}
+
+        ci = MagicMock()
+        ci.obtener_datos_poliza.side_effect = RuntimeError("CI no disponible")
+        collector = self._make_collector(sic, ci)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.numero_poliza == ""
+
+
+# ---------------------------------------------------------------------------
+# ConsultaIntegralClient tests
+# ---------------------------------------------------------------------------
+
+from src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper import (
+    ConsultaIntegralClient,
+    ConsultaIntegralClientStub,
+    _parse_vigi,
+)
+
+_CI_BASE = "http://ptykappa"
+
+_ASEGURADOS_RESPONSE = [
+    {"id": 1, "Nombre": "MARIO ABDIEL PEREZ",  "identificación": "8-808-694"},
+    {"id": 2, "Nombre": "RICARDO BRAGA",        "identificación": "E-8-133188"},
+]
+
+_POLIZAS_MARIO = [
+    {
+        "id": 4298387, "CORE": "Premium", "Póliza": "02-98-1246363-0",
+        "Solución": "Automóvil", "Vigi": "07/01/2026", "Vigf": "07/01/2027",
+        "Estado": "Vigente", "Suma": 12400.00, "Saldo": -155.35, "Siniestros": 1,
+    }
+]
+
+_POLIZAS_RICARDO = [
+    {
+        "id": 1000001, "CORE": "Premium", "Póliza": "02-11-9999999-0",
+        "Solución": "Automóvil", "Vigi": "01/01/2025", "Vigf": "01/01/2026",
+        "Estado": "Vencida", "Suma": 8000.00, "Saldo": 0, "Siniestros": 0,
+    }
+]
+
+
+class TestConsultaIntegralClient:
+
+    def _make_client(self) -> ConsultaIntegralClient:
+        return ConsultaIntegralClient(ci_base_url=_CI_BASE)
+
+    @patch("src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests")
+    def test_retorna_poliza_vigente_para_fecha_en_rango(self, mock_req):
+        mock_req.get.side_effect = [
+            _mock_resp(_ASEGURADOS_RESPONSE),
+            _mock_resp(_POLIZAS_MARIO),
+            _mock_resp([]),  # Ricardo sin pólizas que apliquen
+        ]
+        client = self._make_client()
+
+        resultado = client.obtener_datos_poliza("ED1370", fecha_siniestro="2026-10-15")
+
+        assert resultado["numero_poliza"] == "02-98-1246363-0"
+        assert resultado["estado"] == "Vigente"
+        assert resultado["vigi"] == "2026-07-01"
+        assert resultado["vigf"] == "2027-07-01"
+        assert resultado["cobertura"] == ""  # CI no expone cobertura
+
+    @patch("src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests")
+    def test_selecciona_poliza_que_cubre_fecha_sobre_la_vencida(self, mock_req):
+        # Dos pólizas: una vencida que cubre la fecha, una vigente que no cubre
+        poliza_vencida_cubre = {
+            **_POLIZAS_MARIO[0],
+            "Estado": "Vencida",
+            "Póliza": "02-98-VENCIDA-0",
+            "Vigi": "01/01/2026", "Vigf": "06/30/2026",
+        }
+        poliza_vigente_no_cubre = {
+            **_POLIZAS_MARIO[0],
+            "Estado": "Vigente",
+            "Póliza": "02-98-VIGENTE-0",
+            "Vigi": "07/01/2026", "Vigf": "07/01/2027",
+        }
+        mock_req.get.side_effect = [
+            _mock_resp([_ASEGURADOS_RESPONSE[0]]),
+            _mock_resp([poliza_vencida_cubre, poliza_vigente_no_cubre]),
+        ]
+        client = self._make_client()
+
+        resultado = client.obtener_datos_poliza("ED1370", fecha_siniestro="2026-03-15")
+
+        assert resultado["numero_poliza"] == "02-98-VENCIDA-0"
+
+    @patch("src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests")
+    def test_sin_fecha_retorna_primera_poliza_vigente(self, mock_req):
+        mock_req.get.side_effect = [
+            _mock_resp([_ASEGURADOS_RESPONSE[0]]),
+            _mock_resp(_POLIZAS_MARIO),
+        ]
+        client = self._make_client()
+
+        resultado = client.obtener_datos_poliza("ED1370", fecha_siniestro=None)
+
+        assert resultado["numero_poliza"] == "02-98-1246363-0"
+
+    @patch("src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests")
+    def test_agrega_polizas_de_multiples_asegurados(self, mock_req):
+        mock_req.get.side_effect = [
+            _mock_resp(_ASEGURADOS_RESPONSE),          # dos asegurados
+            _mock_resp(_POLIZAS_MARIO),                # pólizas Mario
+            _mock_resp(_POLIZAS_RICARDO),              # pólizas Ricardo
+        ]
+        client = self._make_client()
+
+        # fecha dentro de vigencia de Mario (julio 2026 – julio 2027)
+        resultado = client.obtener_datos_poliza("ED1370", fecha_siniestro="2026-10-15")
+
+        assert resultado["numero_poliza"] == "02-98-1246363-0"
+
+    @patch("src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests")
+    def test_error_si_no_hay_asegurados(self, mock_req):
+        mock_req.get.return_value = _mock_resp([])
+        client = self._make_client()
+
+        with pytest.raises(RuntimeError, match="no se encontraron asegurados"):
+            client.obtener_datos_poliza("XX9999", fecha_siniestro="2026-10-15")
+
+    @patch("src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests")
+    def test_error_si_no_hay_polizas(self, mock_req):
+        mock_req.get.side_effect = [
+            _mock_resp([_ASEGURADOS_RESPONSE[0]]),
+            _mock_resp([]),
+        ]
+        client = self._make_client()
+
+        with pytest.raises(RuntimeError, match="no se encontraron pólizas"):
+            client.obtener_datos_poliza("XX9999", fecha_siniestro="2026-10-15")
+
+    @patch("src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests")
+    def test_error_http_se_propaga_como_runtime_error(self, mock_req):
+        mock_req.get.side_effect = ConnectionError("ptykappa inaccesible")
+        client = self._make_client()
+
+        with pytest.raises(RuntimeError, match="CI AseguradoPlaca"):
+            client.obtener_datos_poliza("ED1370", fecha_siniestro="2026-10-15")
+
+    def test_suma_asegurada_se_convierte_a_float(self):
+        from src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper import (
+            ConsultaIntegralClient,
+        )
+        with patch(
+            "src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests"
+        ) as mock_req:
+            mock_req.get.side_effect = [
+                _mock_resp([_ASEGURADOS_RESPONSE[0]]),
+                _mock_resp([{**_POLIZAS_MARIO[0], "Suma": "12400"}]),
+            ]
+            client = ConsultaIntegralClient(_CI_BASE)
+            resultado = client.obtener_datos_poliza("ED1370", "2026-10-15")
+            assert isinstance(resultado["suma_asegurada"], float)
+
+    @patch("src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests")
+    def test_respuesta_como_string_json_se_parsea_correctamente(self, mock_req):
+        """CI devuelve el body como string-dentro-de-JSON — debe manejarse transparentemente."""
+        import json
+        mock_req.get.side_effect = [
+            _mock_resp(json.dumps(_ASEGURADOS_RESPONSE)),   # string, no lista
+            _mock_resp(json.dumps(_POLIZAS_MARIO)),         # string, no lista
+        ]
+        client = self._make_client()
+
+        resultado = client.obtener_datos_poliza("ED1370", fecha_siniestro="2026-10-15")
+
+        assert resultado["numero_poliza"] == "02-98-1246363-0"
+
+    def test_parse_vigi_formato_correcto(self):
+        from datetime import date
+        assert _parse_vigi("07/01/2026") == date(2026, 7, 1)
+
+    def test_parse_vigi_string_vacio_retorna_none(self):
+        assert _parse_vigi("") is None
+
+    def test_parse_vigi_formato_invalido_retorna_none(self):
+        assert _parse_vigi("2026-07-01") is None  # ISO no es el formato de CI
+
+    def test_stub_retorna_datos_fijos_sin_http(self):
+        stub = ConsultaIntegralClientStub()
+        resultado = stub.obtener_datos_poliza("EJ1949", "2026-04-16")
+        assert resultado["numero_poliza"] == "02-37-0000000-0"
+        assert resultado["cobertura"] == ""
+
+    def test_stub_acepta_datos_personalizados(self):
+        stub = ConsultaIntegralClientStub({"numero_poliza": "99-99-9999999-9", "cobertura": ""})
+        assert stub.obtener_datos_poliza("XX0000")["numero_poliza"] == "99-99-9999999-9"
+
+
+def _mock_resp(data):
+    """Helper: MagicMock de requests.Response con .json() y .raise_for_status()."""
+    m = MagicMock()
+    m.json.return_value = data
+    m.raise_for_status.return_value = None
+    return m
 
 
 # ---------------------------------------------------------------------------

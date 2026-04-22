@@ -114,13 +114,18 @@ class DataCollector:
         # Fuente primaria: SIC detail endpoint
         evento = self._sic.obtener_datos_evento(placa, expediente)
 
-        # Fuente secundaria: Consulta Integral (fallback)
+        # Fuente primaria de póliza: Consulta Integral
+        # CI es la fuente de verdad para numero_poliza — determina qué póliza
+        # estaba vigente a la fecha del siniestro. SIC es fallback si CI no está disponible.
         datos_ci = None
-        if self._ci and (not evento.get("noPoliza") or not self._tiene_cobertura(evento)):
+        if self._ci:
+            fecha_siniestro = (
+                evento.get("eventDateSinister") or evento.get("eventDate", "")
+            )[:10] or None
             try:
-                datos_ci = self._ci.obtener_datos_poliza(placa)
-            except NotImplementedError:
-                logger.warning("ConsultaIntegralScraper no implementado — usando solo datos SIC")
+                datos_ci = self._ci.obtener_datos_poliza(placa, fecha_siniestro)
+            except (NotImplementedError, RuntimeError) as exc:
+                logger.warning("CI no disponible — fallback a noPoliza de SIC: %s", exc)
 
         siniestro    = self._extraer_siniestro(evento)
         conductor    = self._extraer_conductor(evento)
@@ -213,18 +218,20 @@ class DataCollector:
     @staticmethod
     def _extraer_poliza(evento: dict, datos_ci: dict | None) -> tuple[str, DatosPoliza]:
         """
-        Extrae póliza y cobertura desde SIC (fuente primaria) o CI (fallback).
-        """
-        # Número de póliza: SIC lo tiene en noPoliza
-        numero_poliza = evento.get("noPoliza", "")
-        if not numero_poliza and datos_ci:
-            numero_poliza = datos_ci.get("numero_poliza", "")
+        Extrae póliza y cobertura.
 
-        # Cobertura: SIC en coverages[0].coverageName
+        numero_poliza: CI es fuente primaria. SIC (noPoliza) es fallback si CI no disponible.
+        cobertura: solo viene de SIC (coverages[0].coverageName) — CI no la expone.
+        """
+        # Número de póliza: CI primario, SIC fallback
+        numero_poliza = (
+            datos_ci.get("numero_poliza", "") if datos_ci
+            else evento.get("noPoliza", "")
+        )
+
+        # Cobertura: solo SIC
         coverages = evento.get("coverages") or []
         cobertura = coverages[0].get("coverageName", "") if coverages else ""
-        if not cobertura and datos_ci:
-            cobertura = datos_ci.get("cobertura", "")
 
         reserva = _determinar_reserva(cobertura)
         return numero_poliza, DatosPoliza(cobertura=cobertura, reserva=reserva)
