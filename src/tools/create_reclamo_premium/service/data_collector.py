@@ -10,13 +10,14 @@ Mappings desde campos reales de la API SIC:
   eventDateSinister       → siniestro.fecha
   timeSinister            → siniestro.hora (truncar a HH:MM)
   placeDirectionSinister  → siniestro.lugar
-  storyDetail             → siniestro.descripcion
+  storyDetail             → siniestro.descripcion (Generales 1)
+  VehicleInjuryA          → siniestro.descripcion_danos (Generales 3)
   coverages[0].coverageName → tipo de siniestro + cobertura para reserva
   driverId                → conductor.cedula
   driverName/driverLastName → conductor.nombre/apellido
   driverGender            → conductor.sexo (ver TODO en sic_reclamo_client.py)
   driverBirthDate         → conductor.edad (calculado)
-  IndResponsible          → conductor.responsabilidad ("" → "Pendiente")
+  IndResponsible          → conductor.responsabilidad ("2" → "Inocente"; todo lo demás → "Culpable")
 """
 import logging
 from datetime import date
@@ -36,6 +37,7 @@ from src.tools.create_reclamo_premium.service.reclamo_models import (
     DatosConductor,
     DatosSiniestro,
     DatosPoliza,
+    DatosVehiculo,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,12 +75,13 @@ def _mapear_responsabilidad(ind_responsible: str) -> str:
     """
     Mapea IndResponsible de SIC a los valores de Premium.
 
-    Valores observados:
-      "" → no determinada aún (requiere revisión manual)
-      TODO: confirmar valores "1"/"2" con equipo de operaciones.
+    Protocolo: "Culpable" si hay documento que lo acredita ("1") o si la
+    resolución está pendiente (""). Solo "Inocente" cuando SIC confirma
+    explícitamente ("2").
     """
-    mapping = {"1": "Culpable", "2": "Inocente"}
-    return mapping.get(str(ind_responsible or "").strip(), "Pendiente")
+    if str(ind_responsible or "").strip() == "2":
+        return "Inocente"
+    return "Culpable"
 
 
 class DataCollector:
@@ -137,6 +140,7 @@ class DataCollector:
             siniestro=siniestro,
             conductor=conductor,
             poliza=poliza,
+            vehiculo=self._extraer_vehiculo(evento),
             ajustador_interno=158,
         )
 
@@ -164,7 +168,6 @@ class DataCollector:
     @staticmethod
     def _extraer_siniestro(evento: dict) -> DatosSiniestro:
         """Mapea campos del detalle de evento SIC a DatosSiniestro."""
-        # Fecha y hora del siniestro (campos específicos del siniestro, no de la inspección)
         fecha = evento.get("eventDateSinister") or (evento.get("eventDate", ""))[:10]
         hora_raw = evento.get("timeSinister") or evento.get("time", "")
         hora = hora_raw[:5] if hora_raw else ""  # "12:14:00" → "12:14"
@@ -175,14 +178,13 @@ class DataCollector:
             or "Panamá"
         ).strip()
 
-        # Descripción: preferir relato del conductor sobre observación del inspector
-        descripcion = (
-            evento.get("storyDetail")
-            or evento.get("InspectorObservation", "")
-            or ""
-        ).strip()
+        # Relato del conductor → Generales 1
+        descripcion = (evento.get("storyDetail") or "").strip()
 
-        # Tipo: inferir desde nombre de cobertura, luego desde descripción
+        # Daños al vehículo registrados por el inspector → Generales 3
+        descripcion_danos = (evento.get("VehicleInjuryA") or "").strip()
+
+        # Tipo: inferir desde nombre de cobertura, luego desde relato del conductor
         coverages = evento.get("coverages") or []
         cobertura_nombre = coverages[0].get("coverageName", "") if coverages else ""
         tipo = _determinar_tipo_siniestro(cobertura_nombre or descripcion)
@@ -194,16 +196,18 @@ class DataCollector:
             tipo=tipo,
             descripcion=descripcion,
             fecha_recibo_documentos=date.today().isoformat(),
+            descripcion_danos=descripcion_danos,
         )
 
     @staticmethod
     def _extraer_conductor(evento: dict) -> DatosConductor:
         """Mapea campos del detalle de evento SIC a DatosConductor."""
+        fecha_nacimiento = (evento.get("driverBirthDate") or "")[:10]
         cedula   = evento.get("driverId", "")
         nombre   = evento.get("driverName", "")
         apellido = (evento.get("driverLastName") or "").strip()
         sexo     = _mapear_genero(evento.get("driverGender"))
-        edad     = _calcular_edad(evento.get("driverBirthDate", ""))
+        edad     = _calcular_edad(fecha_nacimiento)
         responsabilidad = _mapear_responsabilidad(evento.get("IndResponsible", ""))
 
         return DatosConductor(
@@ -213,7 +217,23 @@ class DataCollector:
             sexo=sexo,
             edad=edad,
             responsabilidad=responsabilidad,
+            fecha_nacimiento=fecha_nacimiento,
         )
+
+    # Nombres de campo que usa SIC para tarjeta de propiedad (distintas versiones/entornos).
+    # Si ninguno está presente, retorna vacío — se descubrirá con --dump-raw.
+    _TARJETA_FIELDS = ("propertyCard", "cardProperty", "vehicleCard", "nroTarjeta", "tarjetaPropiedad")
+
+    @classmethod
+    def _extraer_vehiculo(cls, evento: dict) -> DatosVehiculo:
+        """Extrae tarjeta de propiedad del vehículo desde el evento SIC."""
+        tarjeta = ""
+        for campo in cls._TARJETA_FIELDS:
+            val = (evento.get(campo) or "").strip()
+            if val:
+                tarjeta = val
+                break
+        return DatosVehiculo(tarjeta_propiedad=tarjeta)
 
     @staticmethod
     def _extraer_poliza(evento: dict, datos_ci: dict | None) -> tuple[str, DatosPoliza]:

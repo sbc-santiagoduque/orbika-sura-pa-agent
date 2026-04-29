@@ -28,6 +28,7 @@ from src.tools.create_reclamo_premium.service.reclamo_models import (
     DatosConductor,
     DatosSiniestro,
     DatosPoliza,
+    DatosVehiculo,
 )
 from src.tools.create_reclamo_premium.infrastructure.sic_reclamo_client import (
     SICReclamoClient,
@@ -55,6 +56,7 @@ EVENTO_SIC_DETAIL = {
     "timeSinister": "12:14:00",
     "placeDirectionSinister": "Al frente del colegio San Vicente de Paul, Santiago.",
     "storyDetail": "Venía hacia el colegio y al llegar, me encontré con un vehículo mal estacionado.",
+    "VehicleInjuryA": "Daños en el guardafango delantero derecho y la puerta delantera.",
     "driverId": "4-218-210",
     "driverName": "Cristobal",
     "driverLastName": " cedeño marrone",
@@ -67,6 +69,7 @@ EVENTO_SIC_DETAIL = {
     "year": "2024",
     "coverages": [{"coverageId": 2, "coverageName": "Colisión o Vuelco"}],
     "collisionType": "Menor",
+    "propertyCard": "3-777-1234",
 }
 
 # Evento en search (estructura de /api/v2/events/search)
@@ -236,7 +239,8 @@ class TestDataCollector:
 
         assert resultado.conductor.apellido == "cedeño marrone"
 
-    def test_conductor_responsabilidad_pendiente_si_ind_responsible_vacio(self):
+    def test_conductor_responsabilidad_culpable_si_ind_responsible_vacio(self):
+        # Protocolo: sin resolución expresa → Culpable
         sic = MagicMock()
         evento = {**EVENTO_SIC_DETAIL, "IndResponsible": ""}
         sic.obtener_datos_evento.return_value = evento
@@ -244,7 +248,7 @@ class TestDataCollector:
 
         resultado = collector.recolectar("02195167", "EJ1949", "5134134")
 
-        assert resultado.conductor.responsabilidad == "Pendiente"
+        assert resultado.conductor.responsabilidad == "Culpable"
 
     def test_fecha_recibo_docs_es_hoy(self):
         sic = MagicMock()
@@ -254,6 +258,36 @@ class TestDataCollector:
         resultado = collector.recolectar("02195167", "EJ1949", "5134134")
 
         assert resultado.siniestro.fecha_recibo_documentos == date.today().isoformat()
+
+    def test_descripcion_danos_viene_de_vehicle_injury_a(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.siniestro.descripcion_danos == "Daños en el guardafango delantero derecho y la puerta delantera."
+
+    def test_descripcion_danos_vacia_si_vehicle_injury_a_ausente(self):
+        sic = MagicMock()
+        evento = {k: v for k, v in EVENTO_SIC_DETAIL.items() if k != "VehicleInjuryA"}
+        sic.obtener_datos_evento.return_value = evento
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.siniestro.descripcion_danos == ""
+
+    def test_descripcion_siniestro_no_usa_vehicle_injury_a_como_fallback(self):
+        # storyDetail ausente → descripcion vacía; VehicleInjuryA no debe llenarla
+        sic = MagicMock()
+        evento = {**EVENTO_SIC_DETAIL, "storyDetail": ""}
+        sic.obtener_datos_evento.return_value = evento
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.siniestro.descripcion == ""
 
     def test_ajustador_interno_siempre_158(self):
         sic = MagicMock()
@@ -322,6 +356,65 @@ class TestDataCollector:
         resultado = collector.recolectar("02195167", "EJ1949", "5134134")
 
         assert resultado.numero_poliza == ""
+
+    def test_conductor_fecha_nacimiento_extraida(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.conductor.fecha_nacimiento == "1960-12-08"
+
+    def test_conductor_edad_calculada_de_fecha_nacimiento(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = {**EVENTO_SIC_DETAIL, "driverBirthDate": "1960-12-08"}
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.conductor.edad > 0
+        assert resultado.conductor.fecha_nacimiento == "1960-12-08"
+
+    def test_conductor_fecha_nacimiento_vacia_si_ausente(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = {**EVENTO_SIC_DETAIL, "driverBirthDate": None}
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.conductor.fecha_nacimiento == ""
+        assert resultado.conductor.edad == 0
+
+    def test_vehiculo_tarjeta_propiedad_desde_propertyCard(self):
+        sic = MagicMock()
+        sic.obtener_datos_evento.return_value = EVENTO_SIC_DETAIL  # tiene propertyCard
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.vehiculo.tarjeta_propiedad == "3-777-1234"
+
+    def test_vehiculo_tarjeta_fallback_a_cardProperty(self):
+        sic = MagicMock()
+        evento = {k: v for k, v in EVENTO_SIC_DETAIL.items() if k != "propertyCard"}
+        evento["cardProperty"] = "8-999-5678"
+        sic.obtener_datos_evento.return_value = evento
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.vehiculo.tarjeta_propiedad == "8-999-5678"
+
+    def test_vehiculo_tarjeta_vacia_si_no_hay_campo(self):
+        sic = MagicMock()
+        evento = {k: v for k, v in EVENTO_SIC_DETAIL.items() if k != "propertyCard"}
+        sic.obtener_datos_evento.return_value = evento
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.vehiculo.tarjeta_propiedad == ""
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +497,32 @@ class TestConsultaIntegralClient:
         resultado = client.obtener_datos_poliza("ED1370", fecha_siniestro="2026-03-15")
 
         assert resultado["numero_poliza"] == "02-98-VENCIDA-0"
+
+    @patch("src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests")
+    def test_ninguna_cubre_fecha_usa_poliza_expirada_mas_reciente(self, mock_req):
+        # Siniestro 2026-04-23, ninguna póliza lo cubre exactamente
+        # Debe elegir la que expiró más cerca (Vigf=03/01/2026), no la primera de la lista
+        poliza_vieja = {
+            **_POLIZAS_MARIO[0],
+            "Póliza": "02-98-VIEJA-0",
+            "Vigi": "01/01/2024", "Vigf": "01/01/2025",
+            "Estado": "Vencida",
+        }
+        poliza_reciente = {
+            **_POLIZAS_MARIO[0],
+            "Póliza": "02-98-RECIENTE-0",
+            "Vigi": "01/01/2025", "Vigf": "03/01/2026",
+            "Estado": "Vencida",
+        }
+        mock_req.get.side_effect = [
+            _mock_resp([_ASEGURADOS_RESPONSE[0]]),
+            _mock_resp([poliza_vieja, poliza_reciente]),
+        ]
+        client = self._make_client()
+
+        resultado = client.obtener_datos_poliza("AT6769", fecha_siniestro="2026-04-23")
+
+        assert resultado["numero_poliza"] == "02-98-RECIENTE-0"
 
     @patch("src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper._requests")
     def test_sin_fecha_retorna_primera_poliza_vigente(self, mock_req):
@@ -641,11 +760,12 @@ class TestMapearGenero:
 
 class TestMapearResponsabilidad:
 
-    def test_vacio_retorna_pendiente(self):
-        assert _mapear_responsabilidad("") == "Pendiente"
+    def test_vacio_retorna_culpable(self):
+        # Sin resolución expresa → Culpable (protocolo: marcar culpable si hay documento o si está pendiente)
+        assert _mapear_responsabilidad("") == "Culpable"
 
-    def test_none_retorna_pendiente(self):
-        assert _mapear_responsabilidad(None) == "Pendiente"
+    def test_none_retorna_culpable(self):
+        assert _mapear_responsabilidad(None) == "Culpable"
 
     def test_uno_retorna_culpable(self):
         assert _mapear_responsabilidad("1") == "Culpable"
@@ -735,7 +855,7 @@ def _make_reclamo_data() -> DatosReclamo:
             apellido="cedeño marrone",
             sexo="M",
             edad=65,
-            responsabilidad="Pendiente",
+            responsabilidad="Culpable",
         ),
         poliza=DatosPoliza(
             cobertura="Colisión o Vuelco",
