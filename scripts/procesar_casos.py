@@ -339,6 +339,8 @@ def _ejecutar_fase_a(caso: dict, sic_username: str, sic_password: str,
 _EXIT_RECLAMO_EXISTENTE  = 2
 _EXIT_RECLAMO_DUPLICADO  = 3
 _EXIT_FUERA_VIGENCIA     = 4
+_EXIT_NO_AUTORIZADO      = 5
+_EXIT_VALIDACION_CAMPO   = 6
 
 
 def _rdp_activo() -> bool:
@@ -589,6 +591,16 @@ def main():
         elif rc == _EXIT_FUERA_VIGENCIA:
             estado.marcar_error_permanente(cn, "Siniestro fuera de vigencia del automóvil — revisión manual")
             notif.error(f"  [B] Fuera de vigencia — {cn}")
+            sin_avance = 0
+            procesados += 1
+        elif rc == _EXIT_NO_AUTORIZADO:
+            estado.marcar_error_permanente(cn, "Usuario sin autorización para crear reclamo — revisión manual")
+            notif.error(f"  [B] Sin autorización — {cn}")
+            sin_avance = 0
+            procesados += 1
+        elif rc == _EXIT_VALIDACION_CAMPO:
+            estado.marcar_error_permanente(cn, "Campo requerido vacío persistente tras reintentos — revisión manual")
+            notif.error(f"  [B] Validación de campo fallida — {cn}")
             sin_avance = 0
             procesados += 1
         else:

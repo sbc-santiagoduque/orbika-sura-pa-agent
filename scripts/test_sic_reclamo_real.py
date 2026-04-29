@@ -61,6 +61,8 @@ def main():
     parser.add_argument("--expediente",  required=True)
     parser.add_argument("--case-number", default="TEST-001")
     parser.add_argument("--base-url",    default="https://api-bkp.claims-sic.apps-connectassistance.com")
+    parser.add_argument("--dump-raw",    action="store_true",
+                        help="Imprimir JSON completo del evento SIC (para descubrir campos)")
     args = parser.parse_args()
 
     if not args.username or not args.password:
@@ -130,13 +132,21 @@ def main():
     try:
         evento = client._obtener_detalle_evento(event_id, headers)
         print(f"[OK] Detalle obtenido — noPoliza: {evento.get('noPoliza')}")
-        print(f"     EventRecord: {evento.get('EventRecord')}")
-        print(f"     driverId: {evento.get('driverId')}")
-        print(f"     driverGender: {evento.get('driverGender')}")
+        print(f"     EventRecord:     {evento.get('EventRecord')}")
+        print(f"     driverId:        {evento.get('driverId')}")
+        print(f"     driverGender:    {evento.get('driverGender')}")
         print(f"     driverBirthDate: {evento.get('driverBirthDate')}")
-        print(f"     IndResponsible: '{evento.get('IndResponsible')}'")
+        print(f"     IndResponsible:  '{evento.get('IndResponsible')}'")
         coverages = evento.get("coverages") or []
-        print(f"     coverages: {[c.get('coverageName') for c in coverages]}")
+        print(f"     coverages:       {[c.get('coverageName') for c in coverages]}")
+        # Campos tarjeta de propiedad — intentar nombres conocidos
+        for campo in ("propertyCard", "cardProperty", "vehicleCard", "nroTarjeta", "tarjetaPropiedad"):
+            val = evento.get(campo)
+            if val is not None:
+                print(f"     {campo}: {val}")
+        if args.dump_raw:
+            print(f"\n--- RAW evento SIC (todos los campos) ---")
+            print(json.dumps(evento, ensure_ascii=False, indent=2))
     except Exception as e:
         print(f"[FAIL] Detalle evento: {e}")
         sys.exit(1)
@@ -159,7 +169,9 @@ def main():
         print(f"     Conductor:    {reclamo.conductor.nombre} {reclamo.conductor.apellido}")
         print(f"                   Cédula: {reclamo.conductor.cedula}")
         print(f"                   Sexo: {reclamo.conductor.sexo} | Edad: {reclamo.conductor.edad} años")
+        print(f"                   Nacimiento: {reclamo.conductor.fecha_nacimiento or '(no disponible)'}")
         print(f"                   Responsabilidad: {reclamo.conductor.responsabilidad}")
+        print(f"     Vehículo:     Tarjeta propiedad: {reclamo.vehiculo.tarjeta_propiedad or '(no disponible)'}")
         print(f"     Ajustador:    {reclamo.ajustador_interno}")
         print(f"     Recibo docs:  {reclamo.siniestro.fecha_recibo_documentos}")
 

@@ -474,6 +474,11 @@ Los campos se mapean automáticamente: tipo_siniestro → código Oracle Forms, 
 ### Infraestructura
 - [ ] **Integrar a Bedrock agent** — registrar `create_reclamo_premium` como action group
 
+### Deuda técnica — obligatorio antes de prod
+- [ ] **Split `open_premium.py`** — 2753 líneas / 50 funciones en un solo archivo. Dividir en módulos: `premium/rdp.py`, `premium/navigation.py`, `premium/formulario.py`, `premium/recovery.py`, `premium/ocr.py`
+- [ ] **Logging unificado en Phase B** — `open_premium.py` usa 302 `print()` sin timestamps ni contexto de caso. Pasar `Notificador` desde `procesar_casos.py` vía `--case-number` para trazabilidad nocturna
+- [ ] **Templates centralizados** — 24 referencias `_T("nombre.png")` dispersas. Reemplazar con diccionario `TEMPLATES = {...}` validado al arrancar para detectar templates faltantes antes del primer caso
+
 ---
 
 ## Ramas

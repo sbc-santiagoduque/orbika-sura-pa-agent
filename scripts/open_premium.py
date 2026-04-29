@@ -1561,6 +1561,7 @@ def _llenar_generales_1(tipo_siniestro_codigo: str = "30",
         print(f"  → Lugar: {lugar_siniestro}")
 
     _captura("paso_26_generales1_completo.png", "Generales (1) completo")
+    _verificar_sin_modal_frm("generales1")
     print("[OK] Generales (1) completado")
     return True
 
@@ -1731,6 +1732,7 @@ def _llenar_generales_2(cedula: str = "8-123-456",
         print("  → Se Declara: Inocente (default)")
 
     _captura("paso_27_generales2_completo.png", "Generales (2) completo")
+    _verificar_sin_modal_frm("generales2")
     print("[OK] Generales (2) completado")
     return True
 
@@ -1861,6 +1863,7 @@ def _llenar_generales_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
         print(f"  → Ajustador Interno: {ajustador_interno}")
 
     _captura("paso_28_generales3_completo.png", "Generales (3) completo")
+    _verificar_sin_modal_frm("generales3")
     print("[OK] Generales (3) completado")
     return True
 
@@ -1952,6 +1955,7 @@ def _llenar_reservas(cobertura_codigo: str = "E",
     _captura("paso_29_monto_reserva.png", f"monto {monto_reserva} ingresado — listo para guardar")
     print(f"  → Monto de Reserva: {monto_reserva}")
 
+    _verificar_sin_modal_frm("reservas")
     print("[OK] Reservas completado")
     return True
 
@@ -1999,28 +2003,16 @@ def _guardar_reclamo() -> str | None:
     _k("{ENTER}",   pausa=2.00)   # guarda — esperar que Oracle Forms procese
     _captura("paso_30_guardado.png", "post-guardar")
 
-    # ── 2.5. Detectar popup "reclamo ya creado" ───────────────────────────────
-    # Si el formulario de Apertura (pestaña G2) sigue visible 1.5s después de
-    # guardar, un diálogo bloqueante impidió el guardado.
-    time.sleep(1.00)
-    tab2_tpl = _T("tab_generales_2.png")
-    if os.path.isfile(tab2_tpl):
-        try:
-            loc_g2 = pyautogui.locateOnScreen(tab2_tpl, confidence=0.85)
-            if loc_g2:
-                _captura("paso_30_dialog_reclamo_existente.png",
-                         "pestaña G2 visible post-guardado — posible reclamo ya existente")
-                _k("{ESC}", pausa=0.60)
-                raise ReclamoExistenteError(
-                    "El formulario de Apertura sigue activo tras guardar "
-                    "— el reclamo probablemente ya existe en esta póliza"
-                )
-        except pyautogui.ImageNotFoundException:
-            pass  # G2 no encontrado → guardado exitoso, formulario avanzó
-        except ReclamoExistenteError:
-            raise
-        except Exception as exc:
-            print(f"  [WARN] Error en detección de reclamo existente: {exc}")
+    # ── 2.5. Detectar bloqueo post-guardado ──────────────────────────────────
+    # Única señal fiable de fallo: modal Oracle Forms visible tras el save.
+    # No usar visibilidad de tab_generales_2 — el tab bar siempre está presente
+    # en el formulario, incluso después de un guardado exitoso que regresa a G1.
+    time.sleep(1.50)
+    if _cerrar_popup_forms_si_existe():
+        _captura("paso_30_error_guardado.png", "modal bloqueó el guardado")
+        raise NoAutorizadoError(
+            "Un modal bloqueó el guardado — usuario sin permisos o error de validación"
+        )
 
     print("  → Reclamo guardado")
 
@@ -2043,6 +2035,8 @@ def _guardar_reclamo() -> str | None:
     _captura("paso_30_generales1.png", "Generales (1) post-guardado")
 
     # ── 4. OCR del área "No. de Reclamo" ──────────────────────────────────────
+    # El crop se guarda siempre como auditoría — aunque OCR falle, el archivo
+    # queda disponible para consulta manual en _CAPTURAS_DIR.
     numero_reclamo = None
     crop_path = _crop_zona_no_reclamo("paso_30_no_reclamo_crop.png")
     if crop_path:
@@ -2054,10 +2048,16 @@ def _guardar_reclamo() -> str | None:
             numero_reclamo = texto.replace(" ", "-") if texto else None
             print(f"  → No. de Reclamo (OCR): {numero_reclamo}")
         except Exception:
-            print("  [WARN] OCR no disponible — crop guardado en paso_30_no_reclamo_crop.png")
+            print(f"  [WARN] OCR no disponible — crop en: {crop_path}")
+    else:
+        print("  [WARN] No se pudo recortar zona No. de Reclamo — label_no_reclamo.png no encontrado")
 
-    _captura("paso_30_completo.png", f"reclamo {numero_reclamo} generado")
-    print(f"[OK] Reclamo guardado — No. de Reclamo: {numero_reclamo}")
+    _captura("paso_30_completo.png", f"reclamo {numero_reclamo or 'OCR-FALLIDO'} generado")
+
+    if not numero_reclamo:
+        print(f"  [!] No. de Reclamo no leído por OCR — revisar crop en capturas para número manual")
+
+    print(f"[OK] Reclamo guardado — No. de Reclamo: {numero_reclamo or '(revisar crop)'}")
     return numero_reclamo
 
 
@@ -2101,6 +2101,102 @@ def _cerrar_modal_no() -> bool:
     return True
 
 
+def _verificar_sin_modal_frm(pestana: str = "") -> None:
+    """
+    Comprueba si hay un modal FRM activo (FRM-40202 u otro).
+    Si lo detecta: lo descarta con Enter y lanza ErrorValidacionCampoError
+    para que el caller retroceda una pestaña y reintente.
+    """
+    if _cerrar_popup_forms_si_existe():
+        raise ErrorValidacionCampoError(
+            f"Modal FRM detectado en pestaña '{pestana}' — campo requerido vacío",
+            pestana=pestana,
+        )
+
+
+_TAB_ANTERIOR = {
+    "generales1": None,           # primera pestaña — solo ESC+re-click
+    "generales2": "generales1",
+    "generales3": "generales2",
+    "reservas":   "generales3",
+}
+
+
+def _retroceder_una_pestana(pestana_fallida: str) -> None:
+    """
+    Retrocede a la pestaña anterior y luego re-entra a pestana_fallida.
+    Sirve para resetear el estado de Oracle Forms cuando FRM-40202 bloqueó
+    la navegación dentro de un paso de llenado.
+
+    Usa tab_generales_2.png como ancla y offsets para G1/G3.
+    tab_reservas.png para Reservas.
+    """
+    import pyautogui
+
+    print(f"  [RETRY] Retrocediendo desde '{pestana_fallida}' para reintentar...")
+
+    # ESC para limpiar cualquier campo en edición
+    try:
+        rdp = _rdp_win()
+        rdp.type_keys("{ESC}", pause=0.05, with_spaces=True)
+        time.sleep(0.25)
+        rdp.type_keys("{ESC}", pause=0.05, with_spaces=True)
+        time.sleep(0.30)
+    except Exception:
+        pass
+
+    tab2_tpl  = _T("tab_generales_2.png")
+    res_tpl   = _T("tab_reservas.png")
+
+    def _click_tab(x, y):
+        pyautogui.click(x, y)
+        time.sleep(0.70)
+
+    def _loc_g2():
+        try:
+            loc = pyautogui.locateOnScreen(tab2_tpl, confidence=0.80)
+            return loc if (loc and loc.left > 100) else None
+        except Exception:
+            return None
+
+    loc = _loc_g2()
+    if loc is None:
+        print("  [WARN] tab_generales_2.png no encontrado — no se puede retroceder")
+        return
+
+    g2_cx = int(loc.left + loc.width / 2)
+    g2_cy = int(loc.top  + loc.height / 2)
+    g1_cx = int(loc.left - loc.width * 0.5)   # G1 = una pestaña a la izquierda de G2
+    g3_cx = int(loc.left + loc.width * 1.5)   # G3 = una pestaña a la derecha de G2
+
+    if pestana_fallida == "generales1":
+        # No hay pestaña anterior — solo re-click G1
+        _click_tab(g1_cx, g2_cy)
+
+    elif pestana_fallida == "generales2":
+        _click_tab(g1_cx, g2_cy)   # ir a G1
+        loc = _loc_g2()
+        if loc:
+            _click_tab(int(loc.left + loc.width / 2), g2_cy)  # volver a G2
+
+    elif pestana_fallida == "generales3":
+        _click_tab(g2_cx, g2_cy)   # ir a G2
+        _click_tab(g3_cx, g2_cy)   # volver a G3
+
+    elif pestana_fallida == "reservas":
+        _click_tab(g3_cx, g2_cy)   # ir a G3
+        try:
+            loc_r = pyautogui.locateOnScreen(res_tpl, confidence=0.80)
+            if loc_r:
+                _click_tab(int(loc_r.left + loc_r.width / 2),
+                           int(loc_r.top  + loc_r.height / 2))
+        except Exception:
+            pass
+
+    _captura(f"retry_pestana_{pestana_fallida}.png", f"tras retroceder a '{pestana_fallida}'")
+    print(f"  [RETRY] Listo para reintentar '{pestana_fallida}'")
+
+
 def _en_menu_principal() -> bool:
     """
     Retorna True si menu_1_reclamos.png es visible — señal de que Oracle Forms
@@ -2124,10 +2220,9 @@ def _cerrar_reclamo_y_volver_inicio() -> None:
     Endosos) vía botón X hasta detectar la pantalla principal con
     menu_1_reclamos.png. Máx 10 intentos como seguro.
 
-    Por cada cierre:
-      1. Click X (via _cerrar_formulario_consulta_endosos)
-      2. Si aparece modal "¿Guardar?" → Tab+Enter (No)
-      3. Verificar si menu_1_reclamos.png ya es visible → si sí, parar
+    Todos los modales durante el cierre usan Enter (Sí), porque Oracle Forms
+    redirige al formulario G1 tras un intento de guardado fallido — en ese
+    estado los modales que aparecen son confirmaciones de cierre, no de guardado.
     """
     _MAX = 10
 
@@ -2143,9 +2238,9 @@ def _cerrar_reclamo_y_volver_inicio() -> None:
         time.sleep(0.60)
         _captura(f"paso_cierre_{intento:02d}.png", f"cierre MDI {intento}")
 
-        if _cerrar_modal_no():
+        if _cerrar_popup_forms_si_existe():
             time.sleep(0.25)
-            _captura(f"paso_cierre_{intento:02d}b_post_no.png", f"post-modal No ({intento})")
+            _captura(f"paso_cierre_{intento:02d}b_post_si.png", f"post-modal Sí ({intento})")
     else:
         print(f"  [WARN] Se alcanzó el máximo de {_MAX} cierres sin detectar menú principal")
 
@@ -2393,6 +2488,17 @@ class NoAutorizadoError(Exception):
     El usuario activo no tiene permisos para crear reclamos.
     Requiere revisión manual o cambio de usuario.
     """
+
+
+class ErrorValidacionCampoError(Exception):
+    """
+    Oracle Forms mostró FRM-40202 ('Se debe ingresar al campo') durante el
+    llenado de un formulario — un campo requerido quedó vacío.
+    El pipeline retrocede una pestaña y reintenta el paso fallido (máx 2 veces).
+    """
+    def __init__(self, mensaje: str, pestana: str = ""):
+        super().__init__(mensaje)
+        self.pestana = pestana  # "generales1", "generales2", "generales3", "reservas"
 
 
 # ------------------------------------------------------------------
@@ -2673,45 +2779,86 @@ def main():
         if not skip_generales1:
             _sin = datos.get("siniestro") or {}
             _tipo_codigo = _tipo_siniestro_a_codigo(_sin.get("tipo", "")) or args.tipo_siniestro
-            _llenar_generales_1(
-                tipo_siniestro_codigo=_tipo_codigo,
-                descripcion=_sin.get("descripcion", "") or "SIN DESCRIPCION",
-                hora_siniestro=_sin.get("hora", "") or "00:00",
-                lugar_siniestro=_sin.get("lugar", "") or "PANAMA",
-            )
+            for _intento_fill in range(1, 3):
+                try:
+                    _llenar_generales_1(
+                        tipo_siniestro_codigo=_tipo_codigo,
+                        descripcion=_sin.get("descripcion", "") or "SIN DESCRIPCION",
+                        hora_siniestro=_sin.get("hora", "") or "00:00",
+                        lugar_siniestro=_sin.get("lugar", "") or "PANAMA",
+                    )
+                    break
+                except ErrorValidacionCampoError as exc:
+                    if _intento_fill < 2:
+                        print(f"  [RETRY G1] {exc} — reintentando...")
+                        _retroceder_una_pestana(exc.pestana)
+                    else:
+                        raise
 
         if not skip_generales2:
             _con = datos.get("conductor") or {}
-            _llenar_generales_2(
-                cedula=_con.get("cedula", "") or "",
-                nombre=(_con.get("nombre", "") or "").upper(),
-                apellido=(_con.get("apellido", "") or "").upper(),
-                sexo=_con.get("sexo", "M") or "M",
-                edad=str(_con.get("edad", "") or ""),
-                responsabilidad=_con.get("responsabilidad", "Culpable") or "Culpable",
-            )
+            for _intento_fill in range(1, 3):
+                try:
+                    _llenar_generales_2(
+                        cedula=_con.get("cedula", "") or "",
+                        nombre=(_con.get("nombre", "") or "").upper(),
+                        apellido=(_con.get("apellido", "") or "").upper(),
+                        sexo=_con.get("sexo", "M") or "M",
+                        edad=str(_con.get("edad", "") or ""),
+                        responsabilidad=_con.get("responsabilidad", "Culpable") or "Culpable",
+                    )
+                    break
+                except ErrorValidacionCampoError as exc:
+                    if _intento_fill < 2:
+                        print(f"  [RETRY G2] {exc} — reintentando...")
+                        _retroceder_una_pestana(exc.pestana)
+                    else:
+                        raise
 
         if not skip_generales3:
             _sin3 = datos.get("siniestro") or {}
-            _llenar_generales_3(
-                descripcion_danos=_sin3.get("descripcion_danos", "") or "SIN DESCRIPCION",
-                ajustador_interno=str(datos.get("ajustador_interno", 158) or 158),
-            )
+            for _intento_fill in range(1, 3):
+                try:
+                    _llenar_generales_3(
+                        descripcion_danos=_sin3.get("descripcion_danos", "") or "SIN DESCRIPCION",
+                        ajustador_interno=str(datos.get("ajustador_interno", 158) or 158),
+                    )
+                    break
+                except ErrorValidacionCampoError as exc:
+                    if _intento_fill < 2:
+                        print(f"  [RETRY G3] {exc} — reintentando...")
+                        _retroceder_una_pestana(exc.pestana)
+                    else:
+                        raise
 
         if not skip_reservas:
             _pol = datos.get("poliza") or {}
-            _llenar_reservas(
-                cobertura_codigo=_cobertura_a_codigo(_pol.get("cobertura", "")),
-                monto_reserva=str(int(_pol.get("reserva", 1300) or 1300)),
-            )
+            for _intento_fill in range(1, 3):
+                try:
+                    _llenar_reservas(
+                        cobertura_codigo=_cobertura_a_codigo(_pol.get("cobertura", "")),
+                        monto_reserva=str(int(_pol.get("reserva", 1300) or 1300)),
+                    )
+                    break
+                except ErrorValidacionCampoError as exc:
+                    if _intento_fill < 2:
+                        print(f"  [RETRY RES] {exc} — reintentando...")
+                        _retroceder_una_pestana(exc.pestana)
+                    else:
+                        raise
 
         if args.guardar:
             try:
                 numero = _guardar_reclamo()
                 print(f"\n[✓] RECLAMO CREADO — No.: {numero}")
                 _cerrar_reclamo_y_volver_inicio()
+            except NoAutorizadoError as exc:
+                print(f"\n[!] NO AUTORIZADO — {exc}")
+                _cerrar_reclamo_y_volver_inicio()
+                sys.exit(5)
             except ReclamoExistenteError as exc:
                 print(f"\n[!] RECLAMO YA EXISTE — {exc}")
+                _cerrar_reclamo_y_volver_inicio()
                 sys.exit(2)
         elif args.simular_guardar:
             _simular_guardar()
@@ -2725,12 +2872,19 @@ def main():
     except ReclamoDuplicadoError as exc:
         print(f"\n[!] RECLAMO DUPLICADO — {exc}")
         print("    Oracle Forms advirtió posible duplicidad — caso saltado.")
+        _cerrar_reclamo_y_volver_inicio()
         sys.exit(3)
 
     except SiniestroFueraVigenciaError as exc:
         print(f"\n[!] SINIESTRO FUERA DE VIGENCIA — {exc}")
         print("    La fecha del siniestro no está cubierta por ningún endoso — requiere revisión manual.")
         sys.exit(4)
+
+    except ErrorValidacionCampoError as exc:
+        print(f"\n[!] VALIDACION FALLIDA tras reintentos — {exc}")
+        print(f"    Pestaña: {exc.pestana} — campo requerido vacío persistente.")
+        _cerrar_reclamo_y_volver_inicio()
+        sys.exit(6)
 
     finally:
         pass

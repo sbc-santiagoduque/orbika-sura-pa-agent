@@ -1,20 +1,38 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+dist/
+
+# Tests / coverage
 .pytest_cache/
 .coverage
 htmlcov/
-dist/
-*.egg-info/
+
+# Entorno virtual
 .env
 agente-env/
 .venv/
 venv/
+
+# Artefactos de build / deploy
 *.zip
 bedrock-logs.md
-scripts/*.png
-scripts/capturas/
+
+# RDP runtime
 scripts/_conexion_temporal.rdp
+
+# PNGs — ignorar todo excepto templates de docs/
 *.png
+!docs/screens/*.png
 !docs/template_server_premium.png
+
+# Outputs de ejecución (capturas, logs, datos de casos, estado runtime)
+scripts/capturas/
+scripts/resultados/
+scripts/datos/
+scripts/estado/
+
+# Claude Code
 .claude

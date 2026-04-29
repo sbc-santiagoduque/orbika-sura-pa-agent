@@ -64,7 +64,7 @@ class ConsultaIntegralClient:
     cubre la fecha del siniestro.
     """
 
-    def __init__(self, ci_base_url: str, timeout: int = 10):
+    def __init__(self, ci_base_url: str, timeout: int = 5):
         self._base_url = ci_base_url.rstrip("/")
         self._timeout = timeout
 
@@ -126,11 +126,16 @@ class ConsultaIntegralClient:
     # Requests HTTP
     # ------------------------------------------------------------------
 
+    # Forzar cierre de conexión tras cada request para evitar reusar sockets
+    # muertos cuando el servidor CI cierra el keep-alive tras varias consultas.
+    _HEADERS = {"Connection": "close"}
+
     def _obtener_asegurados(self, placa: str) -> list[dict]:
         """GET /api/api/AseguradoPlaca?id={placa}"""
         url = f"{self._base_url}/api/api/AseguradoPlaca"
         try:
-            resp = _requests.get(url, params={"id": placa}, timeout=self._timeout)
+            resp = _requests.get(url, params={"id": placa}, timeout=self._timeout,
+                                 headers=self._HEADERS)
             resp.raise_for_status()
             return _parse_json_response(resp.json())
         except Exception as exc:
@@ -144,6 +149,7 @@ class ConsultaIntegralClient:
                 url,
                 params={"id": cedula, "placasn": placa, "Valor": "undefined"},
                 timeout=self._timeout,
+                headers=self._HEADERS,
             )
             resp.raise_for_status()
             return _parse_json_response(resp.json())
@@ -176,18 +182,22 @@ class ConsultaIntegralClient:
     @staticmethod
     def _seleccionar_poliza(polizas: list[dict], fecha_dt: date | None, placa: str) -> dict:
         """
-        Selecciona la póliza correcta.
+        Selecciona la póliza correcta para la fecha del siniestro.
 
         Prioridad con fecha_siniestro:
-          1. Pólizas donde Vigi ≤ fecha_siniestro ≤ Vigf
-             → dentro del grupo, Estado=Vigente primero
-          2. Si ninguna cubre la fecha, log de advertencia y retorna la primera
-             con Estado=Vigente (o la primera disponible).
+          1. Pólizas donde Vigi <= fecha_siniestro <= Vigf (cobertura exacta)
+             → dentro del grupo, Estado=Vigente primero.
+          2. Si ninguna cubre exactamente: pólizas que iniciaron antes del
+             siniestro, ordenadas por Vigf descendente (la que expiró más
+             recientemente). Una póliza expirada es válida si el siniestro
+             ocurrió dentro de su período.
+          3. Fallback final: primera disponible (Estado=Vigente primero).
 
         Sin fecha_siniestro:
           - Estado=Vigente primero, luego primera disponible.
         """
         if fecha_dt:
+            # 1. Cobertura exacta
             cubren = [
                 p for p in polizas
                 if _parse_vigi(p.get("Vigi", "")) is not None
@@ -198,8 +208,27 @@ class ConsultaIntegralClient:
                 cubren.sort(key=lambda p: p.get("Estado", "") != "Vigente")
                 return cubren[0]
 
+            # 2. Iniciaron antes del siniestro → la de Vigf más reciente
+            anteriores = [
+                p for p in polizas
+                if _parse_vigi(p.get("Vigi", "")) is not None
+                and _parse_vigi(p.get("Vigi", "")) <= fecha_dt
+            ]
+            if anteriores:
+                anteriores.sort(
+                    key=lambda p: _parse_vigi(p.get("Vigf", "")) or date.min,
+                    reverse=True,
+                )
+                logger.warning(
+                    "CI: ninguna póliza cubre exactamente la fecha %s para placa '%s'"
+                    " — usando la de vigencia más reciente (Vigf=%s)",
+                    fecha_dt, placa, anteriores[0].get("Vigf", ""),
+                )
+                return anteriores[0]
+
             logger.warning(
-                "CI: ninguna póliza cubre la fecha %s para placa '%s' — usando primera disponible",
+                "CI: sin pólizas anteriores a la fecha %s para placa '%s'"
+                " — usando primera disponible",
                 fecha_dt, placa,
             )
 
