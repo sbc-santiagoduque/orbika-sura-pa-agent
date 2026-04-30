@@ -77,6 +77,62 @@ _TEMPLATE_CONEXION = os.path.join(_DOCS_DIR, "template_premium_conexion.png")
 # Templates de pantallas Premium (UiPath-style: una imagen por pantalla/elemento)
 _T = lambda name: os.path.join(_SCREENS_DIR, name)  # noqa: E731
 
+# Catálogo centralizado de templates — fuente de verdad para nombres de archivo.
+# Si un template se renombra o elimina, _validar_templates() lo detecta al
+# arrancar en lugar de fallar silenciosamente en runtime.
+_TEMPLATES = (
+    "boton_cancel_shutdown.png",
+    "boton_coberturas_auto.png",
+    "boton_consultar_unidades.png",
+    "boton_lov_tipo_siniestro.png",
+    "boton_seleccionar_cobertura.png",
+    "campo_ajustador_interno.png",
+    "campo_apellido_conductor.png",
+    "campo_cedula_conductor.png",
+    "campo_descripcion_danos.png",
+    "campo_descripcion_siniestro.png",
+    "campo_edad_conductor.png",
+    "campo_fecha_recibo_docs.png",
+    "campo_hora_siniestro.png",
+    "campo_lugar_conductor.png",
+    "campo_lugar_siniestro.png",
+    "campo_nombre_conductor.png",
+    "campo_relacion_asegurado.png",
+    "campo_sexo_conductor.png",
+    "campo_tipo_siniestro.png",
+    "col_cobertura_reservas.png",
+    "label_no_reclamo.png",
+    "menu_1211_apertura.png",
+    "menu_121_manejo.png",
+    "menu_12_procesos.png",
+    "menu_1_reclamos.png",
+    "menu_premium.png",
+    "modal_ok_forms.png",
+    "p17_menu_apertura.png",
+    "p19_consulta_endosos.png",
+    "radio_culpable.png",
+    "tab_generales_2.png",
+    "tab_generales_3.png",
+    "tab_reservas.png",
+    "titlebar_consulta_endosos.png",
+    "titlebar_forms_modal.png",
+    "titlebar_oracle_forms.png",
+    "titulo_shutdown_tracker.png",
+)
+
+
+def _validar_templates() -> None:
+    """
+    Verifica que todos los templates del catálogo existan en docs/screens/.
+    Llama en main() antes de iniciar el flujo para detectar templates faltantes
+    antes de que fallen silenciosamente en runtime.
+    """
+    faltantes = [t for t in _TEMPLATES if not os.path.isfile(_T(t))]
+    if faltantes:
+        for t in faltantes:
+            _log(f"[WARN] Template faltante: docs/screens/{t}")
+        _log(f"[WARN] {len(faltantes)} template(s) faltantes — algunos pasos pueden fallar")
+
 # Directorio de capturas — scripts/capturas/
 _CAPTURAS_DIR = os.path.join(_SCRIPT_DIR, "capturas")
 
@@ -96,6 +152,39 @@ if os.path.isfile(_dotenv_path):
 
 
 # ------------------------------------------------------------------
+# Logging — Notificador con timestamps y Telegram
+# ------------------------------------------------------------------
+
+_notif = None  # inicializado en main() con el número de caso
+
+
+def _log(*args, **kwargs) -> None:
+    """
+    Drop-in para print() que enruta al Notificador cuando está disponible.
+    Sin Notificador se comporta exactamente igual que print().
+    Nivel inferido del prefijo del mensaje:
+      [WARN] / [!]   → alerta
+      [ERROR]        → error
+      [OK] / [✓]     → ok
+      resto          → info
+    """
+    import builtins
+    if _notif is None:
+        builtins.print(*args, **kwargs)
+        return
+    msg = " ".join(str(a) for a in args)
+    s = msg.lstrip()
+    if s.startswith(("[WARN]", "[!")):
+        _notif.alerta(msg)
+    elif s.startswith("[ERROR]"):
+        _notif.error(msg)
+    elif s.startswith(("[OK]", "[✓]")):
+        _notif.ok(msg)
+    else:
+        _notif.info(msg)
+
+
+# ------------------------------------------------------------------
 # Capturas de pantalla numeradas
 # ------------------------------------------------------------------
 
@@ -110,7 +199,7 @@ def _captura(nombre: str, label: str = "") -> str:
     time.sleep(0.5)          # pequeña pausa para que la UI termine de renderizar
     pyautogui.screenshot().save(path)
     tag = f" [{label}]" if label else ""
-    print(f"  📸 {nombre}{tag}")
+    _log(f"  📸 {nombre}{tag}")
     return path
 
 
@@ -134,7 +223,7 @@ def _captura_con_marca(nombre: str, x: int, y: int, radio: int = 40) -> str:
     draw.line([x - radio - 10, y, x + radio + 10, y], fill="red", width=3)
     draw.line([x, y - radio - 10, x, y + radio + 10], fill="red", width=3)
     img.save(path)
-    print(f"  📸 {nombre} [marcado en ({x}, {y})]")
+    _log(f"  📸 {nombre} [marcado en ({x}, {y})]")
     return path
 
 
@@ -217,7 +306,7 @@ def _abrir_rdp(host: str = "", username: str = "", fullscreen: bool = True) -> s
     if fullscreen:
         cmd.append("/f")
     proceso = subprocess.Popen(cmd)
-    print(f"[OK] mstsc lanzado con 'SERVER PREMIUM.rdp' (PID {proceso.pid})")
+    _log(f"[OK] mstsc lanzado con 'SERVER PREMIUM.rdp' (PID {proceso.pid})")
     return proceso
 
 
@@ -242,7 +331,7 @@ def _manejar_dialogo_credenciales(username: str, password: str) -> bool:
         return False
 
     titulo = dialogos[0]
-    print(f"  → Diálogo credenciales: '{titulo}'")
+    _log(f"  → Diálogo credenciales: '{titulo}'")
     _captura("paso_05_dialogo_credenciales.png", "antes de enviar credenciales")
 
     # Intento 1: pywinauto uia — busca por título exacto o parcial
@@ -250,26 +339,26 @@ def _manejar_dialogo_credenciales(username: str, password: str) -> bool:
         from pywinauto import Desktop
         todas = Desktop(backend="uia").windows()
         wins = [w for w in todas if titulo in w.window_text() and w.is_visible()]
-        print(f"  → uia windows con '{titulo}': {len(wins)}")
+        _log(f"  → uia windows con '{titulo}': {len(wins)}")
         if wins:
             dlg = wins[0]
             campos = dlg.descendants(control_type="Edit")
-            print(f"  → Campos Edit (uia): {len(campos)}")
+            _log(f"  → Campos Edit (uia): {len(campos)}")
             if len(campos) >= 2:
                 campos[0].click_input()
                 campos[0].type_keys("^a")
                 campos[0].type_keys(username, with_spaces=True)
-                print(f"  → Usuario: {username}")
+                _log(f"  → Usuario: {username}")
                 time.sleep(0.2)
                 campos[1].click_input()
                 campos[1].type_keys("^a")
                 campos[1].type_keys(password, with_spaces=True)
-                print(f"  → Contraseña escrita (uia)")
+                _log(f"  → Contraseña escrita (uia)")
             elif len(campos) == 1:
                 campos[0].click_input()
                 campos[0].type_keys("^a")
                 campos[0].type_keys(password, with_spaces=True)
-                print(f"  → Contraseña escrita uia (campo único)")
+                _log(f"  → Contraseña escrita uia (campo único)")
             else:
                 raise RuntimeError("0 campos Edit")
             time.sleep(0.3)
@@ -281,7 +370,7 @@ def _manejar_dialogo_credenciales(username: str, password: str) -> bool:
             _captura("paso_06_credenciales_enviadas.png", "uia")
             return True
     except Exception as e:
-        print(f"  → uia falló: {e}")
+        _log(f"  → uia falló: {e}")
 
     # Intento 2: click por posición + portapapeles (soporta caracteres especiales)
     try:
@@ -295,7 +384,7 @@ def _manejar_dialogo_credenciales(username: str, password: str) -> bool:
 
         # Campo usuario (~45% alto)
         cy_user = win.top + int(win.height * 0.45)
-        print(f"  → Click usuario ({cx}, {cy_user})")
+        _log(f"  → Click usuario ({cx}, {cy_user})")
         pyautogui.click(cx, cy_user, clicks=3, interval=0.1)
         time.sleep(0.2)
         pyautogui.hotkey("ctrl", "a")
@@ -303,7 +392,7 @@ def _manejar_dialogo_credenciales(username: str, password: str) -> bool:
 
         # Campo contraseña (~60% alto)
         cy_pwd = win.top + int(win.height * 0.60)
-        print(f"  → Click contraseña ({cx}, {cy_pwd})")
+        _log(f"  → Click contraseña ({cx}, {cy_pwd})")
         pyautogui.click(cx, cy_pwd, clicks=3, interval=0.1)
         time.sleep(0.2)
         pyautogui.hotkey("ctrl", "a")
@@ -317,7 +406,7 @@ def _manejar_dialogo_credenciales(username: str, password: str) -> bool:
         _captura("paso_06_credenciales_enviadas.png", "portapapeles")
         return True
     except Exception as e:
-        print(f"  → click+portapapeles: {e}")
+        _log(f"  → click+portapapeles: {e}")
 
     # Intento 3: Tab + portapapeles
     try:
@@ -338,7 +427,7 @@ def _manejar_dialogo_credenciales(username: str, password: str) -> bool:
         _captura("paso_06_credenciales_enviadas.png", "tab+portapapeles")
         return True
     except Exception as e:
-        print(f"  → tab fallback: {e}")
+        _log(f"  → tab fallback: {e}")
 
     return True
 
@@ -390,12 +479,12 @@ def _manejar_dialogo_certificado() -> bool:
     # Inspeccionar botones para distinguir tipo de diálogo
     botones = _inspeccionar_botones_dialogo(titulo)
     nombres_lower = [b.lower() for b in botones]
-    print(f"  → Diálogo '{titulo}' — botones: {botones}")
+    _log(f"  → Diálogo '{titulo}' — botones: {botones}")
 
     # Diálogo de error (solo "Aceptar") — cerrar y NO reintentar conexión
     if botones and all(b.lower() in ("aceptar", "ok", "cerrar", "close")
                        for b in botones if b.strip()):
-        print(f"  → [ERROR RDP] Diálogo de error detectado — cerrando con Enter")
+        _log(f"  → [ERROR RDP] Diálogo de error detectado — cerrando con Enter")
         _captura("error_rdp_dialogo.png", "error de conexión RDP")
         try:
             win = gw.getWindowsWithTitle(titulo)[0]
@@ -425,13 +514,13 @@ def _manejar_dialogo_certificado() -> bool:
             for boton in botones:
                 texto_limpio = _strip_amp(boton.window_text()).lower()
                 if texto_limpio in _BOTONES_ACEPTAR:
-                    print(f"  → Click '{boton.window_text()}' (backend={backend})")
+                    _log(f"  → Click '{boton.window_text()}' (backend={backend})")
                     boton.click_input()
                     time.sleep(1.0)
                     _captura("paso_04_certificado_aceptado.png", f"click {backend}")
                     return True
     except Exception as e:
-        print(f"  → pywinauto: {e}")
+        _log(f"  → pywinauto: {e}")
 
     # Fallback teclado — usar nombre limpio del botón para decidir tecla
     try:
@@ -442,19 +531,19 @@ def _manejar_dialogo_certificado() -> bool:
         if any(b in nombres_lower for b in ("conectar", "connect")):
             # "Advertencia de seguridad": botón Conectar → suele ser el default → Enter
             pyautogui.hotkey("enter")
-            print(f"  → Enter (Conectar)")
+            _log(f"  → Enter (Conectar)")
         else:
             # "Conexión a Escritorio remoto": foco en "No" → Left → "Sí" → Enter
             pyautogui.hotkey("left")
             time.sleep(0.2)
             pyautogui.hotkey("enter")
-            print(f"  → Left+Enter (Sí)")
+            _log(f"  → Left+Enter (Sí)")
 
         time.sleep(1.0)
         _captura("paso_04_certificado_aceptado.png", "teclado fallback")
         return True
     except Exception as ex:
-        print(f"  → Fallback teclado: {ex}")
+        _log(f"  → Fallback teclado: {ex}")
 
     return False
 
@@ -480,7 +569,7 @@ def _esperar_escritorio(host: str, username: str, password: str,
             and " - " in t
         ]
         if sesion_activa:
-            print(f"[OK] Escritorio conectado: '{sesion_activa[0]}'")
+            _log(f"[OK] Escritorio conectado: '{sesion_activa[0]}'")
             return True
 
         # Diálogo de credenciales
@@ -490,11 +579,11 @@ def _esperar_escritorio(host: str, username: str, password: str,
         ]
         if dialogo_creds:
             if cred_reintentos >= _MAX_CRED_REINTENTOS:
-                print(f"[ERROR] Credenciales rechazadas {_MAX_CRED_REINTENTOS} veces")
+                _log(f"[ERROR] Credenciales rechazadas {_MAX_CRED_REINTENTOS} veces")
                 _captura("error_credenciales_rechazadas.png")
                 return False
             cred_reintentos += 1
-            print(f"  → Credenciales intento {cred_reintentos}/{_MAX_CRED_REINTENTOS}")
+            _log(f"  → Credenciales intento {cred_reintentos}/{_MAX_CRED_REINTENTOS}")
             _manejar_dialogo_credenciales(username, password)
             continue
 
@@ -504,7 +593,7 @@ def _esperar_escritorio(host: str, username: str, password: str,
             if "Advertencia de seguridad" in t or "Security Warning" in t
         ]
         if advertencia:
-            print(f"  → Advertencia certificado: '{advertencia[0]}'")
+            _log(f"  → Advertencia certificado: '{advertencia[0]}'")
             _manejar_dialogo_certificado()
             continue
 
@@ -516,7 +605,7 @@ def _esperar_escritorio(host: str, username: str, password: str,
             if "Escritorio remoto" in t or "Remote Desktop" in t
         ]
         estado = f"'{conectando[0]}'" if conectando else "esperando mstsc..."
-        print(f"  → Intento {i+1}/{intentos} — {estado}")
+        _log(f"  → Intento {i+1}/{intentos} — {estado}")
 
     return False
 
@@ -541,7 +630,7 @@ def _enfocar_ventana_rdp(host: str) -> bool:
         time.sleep(1.0)
         return True
     except Exception as e:
-        print(f"  → No pudo enfocar ventana RDP: {e}")
+        _log(f"  → No pudo enfocar ventana RDP: {e}")
         return False
 
 
@@ -576,7 +665,7 @@ def _esperar_escritorio_rdp_listo(timeout_s: int = 90) -> bool:
     from PIL import Image
     import hashlib
 
-    print(f"  → Esperando que el escritorio remoto cargue (hasta {timeout_s}s)...")
+    _log(f"  → Esperando que el escritorio remoto cargue (hasta {timeout_s}s)...")
     fin = time.time() + timeout_s
     hash_anterior = None
     iguales_consecutivos = 0
@@ -589,17 +678,17 @@ def _esperar_escritorio_rdp_listo(timeout_s: int = 90) -> bool:
 
         if hash_actual == hash_anterior:
             iguales_consecutivos += 1
-            print(f"  → Pantalla estable ({iguales_consecutivos}/3)...")
+            _log(f"  → Pantalla estable ({iguales_consecutivos}/3)...")
             if iguales_consecutivos >= 3:
-                print(f"  → Escritorio listo — pantalla estable por {iguales_consecutivos * 3}s")
+                _log(f"  → Escritorio listo — pantalla estable por {iguales_consecutivos * 3}s")
                 return True
         else:
             iguales_consecutivos = 0
-            print(f"  → Pantalla cambiando (aún cargando)...")
+            _log(f"  → Pantalla cambiando (aún cargando)...")
 
         hash_anterior = hash_actual
 
-    print(f"  → [WARN] Timeout esperando escritorio — intentando de todas formas")
+    _log(f"  → [WARN] Timeout esperando escritorio — intentando de todas formas")
     return False
 
 
@@ -618,7 +707,7 @@ def _cerrar_shutdown_tracker() -> bool:
         if pos:
             pyautogui.click(pos)
             time.sleep(0.5)
-            print("  → Shutdown Event Tracker cerrado")
+            _log("  → Shutdown Event Tracker cerrado")
             return True
     except Exception:
         pass
@@ -628,7 +717,7 @@ def _cerrar_shutdown_tracker() -> bool:
 def _abrir_servidor_premium(dry_run: bool = False, retries: int = 5) -> bool:
     import pyautogui
 
-    print("\n[→] Buscando ícono SERVER PREMIUM...")
+    _log("\n[→] Buscando ícono SERVER PREMIUM...")
     _captura("paso_08_buscando_premium.png", "pantalla donde busca el ícono")
 
     for intento in range(1, retries + 1):
@@ -639,29 +728,29 @@ def _abrir_servidor_premium(dry_run: bool = False, retries: int = 5) -> bool:
 
         if coords:
             x, y = coords
-            print(f"[OK] SERVER PREMIUM encontrado en ({x}, {y}) — intento {intento}/{retries}")
+            _log(f"[OK] SERVER PREMIUM encontrado en ({x}, {y}) — intento {intento}/{retries}")
             _captura_con_marca("paso_09_premium_encontrado.png", x, y)
 
             if dry_run:
-                print(f"[DRY-RUN] Doble click en ({x}, {y}) — no ejecutado")
+                _log(f"[DRY-RUN] Doble click en ({x}, {y}) — no ejecutado")
                 return True
 
             pyautogui.doubleClick(x, y)
-            print(f"[OK] Doble click en SERVER PREMIUM")
+            _log(f"[OK] Doble click en SERVER PREMIUM")
             return True
 
-        print(f"  → Ícono no encontrado (intento {intento}/{retries}) — esperando 3s...")
+        _log(f"  → Ícono no encontrado (intento {intento}/{retries}) — esperando 3s...")
         _captura(f"paso_08_intento_{intento:02d}.png", f"intento {intento} — ícono no encontrado")
         time.sleep(3)
 
-    print("[WARN] SERVER PREMIUM no detectado")
+    _log("[WARN] SERVER PREMIUM no detectado")
     return False
 
 
 def _esperar_premium_abierto(timeout_s: int = 30) -> bool:
     import pygetwindow as gw
 
-    print(f"[→] Esperando que Premium cargue (hasta {timeout_s}s)...")
+    _log(f"[→] Esperando que Premium cargue (hasta {timeout_s}s)...")
     fin = time.time() + timeout_s
 
     while time.time() < fin:
@@ -673,11 +762,11 @@ def _esperar_premium_abierto(timeout_s: int = 30) -> bool:
             and t not in ("Conexión a Escritorio remoto", "Remote Desktop Connection")
         ]
         if premium:
-            print(f"[OK] Premium abierto: '{premium[0]}'")
+            _log(f"[OK] Premium abierto: '{premium[0]}'")
             return True
 
-    print("[WARN] No se detectó ventana de Premium por título")
-    print("       (puede haber abierto dentro del escritorio remoto — ver paso_10)")
+    _log("[WARN] No se detectó ventana de Premium por título")
+    _log("       (puede haber abierto dentro del escritorio remoto — ver paso_10)")
     return False
 
 
@@ -710,21 +799,21 @@ def _esperar_dialogo_conexion(timeout_s: int = 30) -> bool:
     import pyautogui
     import hashlib
 
-    print(f"\n[→] Paso 11 — Esperando diálogo 'Conexión' Oracle Forms (hasta {timeout_s}s)...")
+    _log(f"\n[→] Paso 11 — Esperando diálogo 'Conexión' Oracle Forms (hasta {timeout_s}s)...")
     fin = time.time() + timeout_s
 
     if os.path.isfile(_TEMPLATE_CONEXION):
         while time.time() < fin:
             coords = _buscar_en_pantalla(_TEMPLATE_CONEXION, confidence=0.75)
             if coords:
-                print(f"[OK] Diálogo 'Conexión' detectado en {coords}")
+                _log(f"[OK] Diálogo 'Conexión' detectado en {coords}")
                 _captura("paso_11_dialogo_conexion.png", "diálogo Conexión detectado")
                 return True
-            print("  → Buscando diálogo Conexión...")
+            _log("  → Buscando diálogo Conexión...")
             time.sleep(1.5)
     else:
-        print("  → Sin template — esperando estabilidad de pantalla")
-        print(f"     (Tip: crea docs/template_premium_conexion.png para detección precisa)")
+        _log("  → Sin template — esperando estabilidad de pantalla")
+        _log(f"     (Tip: crea docs/template_premium_conexion.png para detección precisa)")
         hash_ant = None
         estables = 0
         while time.time() < fin:
@@ -733,16 +822,16 @@ def _esperar_dialogo_conexion(timeout_s: int = 30) -> bool:
             h = hashlib.md5(img.tobytes()).hexdigest()
             if h == hash_ant:
                 estables += 1
-                print(f"  → Pantalla estable ({estables}/2)...")
+                _log(f"  → Pantalla estable ({estables}/2)...")
                 if estables >= 2:
                     _captura("paso_11_dialogo_conexion.png", "pantalla estable — diálogo listo")
                     return True
             else:
                 estables = 0
-                print("  → Pantalla cambiando...")
+                _log("  → Pantalla cambiando...")
             hash_ant = h
 
-    print("[WARN] Timeout esperando diálogo 'Conexión'")
+    _log("[WARN] Timeout esperando diálogo 'Conexión'")
     _captura("paso_11_timeout.png", "timeout diálogo Conexión")
     return False
 
@@ -761,7 +850,7 @@ def _completar_login_premium(usuario: str, password: str) -> bool:
     """
     import pyautogui
 
-    print(f"\n[→] Paso 12-15 — Llenando diálogo 'Conexión'...")
+    _log(f"\n[→] Paso 12-15 — Llenando diálogo 'Conexión'...")
 
     # Enfocar ventana RDP antes de cualquier interacción (igual que pasos 17-30)
     try:
@@ -769,9 +858,9 @@ def _completar_login_premium(usuario: str, password: str) -> bool:
         rdp = _rdp_win()
         rdp.set_focus()
         time.sleep(0.50)
-        print("  → Ventana RDP enfocada")
+        _log("  → Ventana RDP enfocada")
     except Exception as exc:
-        print(f"  [WARN] set_focus RDP: {exc}")
+        _log(f"  [WARN] set_focus RDP: {exc}")
 
     # Oracle Forms ya posiciona el cursor en el campo Usuario al abrir el
     # diálogo — no se necesita click. Solo asegurar que la ventana RDP tiene
@@ -781,14 +870,14 @@ def _completar_login_premium(usuario: str, password: str) -> bool:
     # Paso 12: Usuario — escribir carácter por carácter (sin clipboard)
     pyautogui.write(usuario, interval=0.05)
     _captura("paso_12_usuario_escrito.png", f"usuario: {usuario}")
-    print(f"  → [12] Usuario escrito: {usuario}")
+    _log(f"  → [12] Usuario escrito: {usuario}")
 
     # Paso 13: Contraseña
     pyautogui.hotkey("tab")
     time.sleep(0.2)
     pyautogui.write(password, interval=0.05)
     _captura("paso_13_password_escrito.png", "contraseña escrita")
-    print("  → [13] Contraseña escrita")
+    _log("  → [13] Contraseña escrita")
 
     # Paso 14: Base de datos (siempre vacío) → Tab → Tab → foco en Conectar
     pyautogui.hotkey("tab")
@@ -796,13 +885,13 @@ def _completar_login_premium(usuario: str, password: str) -> bool:
     pyautogui.hotkey("tab")
     time.sleep(0.2)
     _captura("paso_14_foco_conectar.png", "foco en botón Conectar")
-    print("  → [14] Foco en botón Conectar")
+    _log("  → [14] Foco en botón Conectar")
 
     # Paso 15: Enter = Conectar
     pyautogui.hotkey("enter")
     time.sleep(1.0)
     _captura("paso_15_conectar_enviado.png", "Conectar ejecutado")
-    print("  → [15] Conectar ejecutado")
+    _log("  → [15] Conectar ejecutado")
 
     return True
 
@@ -817,7 +906,7 @@ def _esperar_premium_logueado(timeout_s: int = 30) -> bool:
     import pyautogui
     import hashlib
 
-    print(f"\n[→] Paso 16 — Esperando pantalla principal Premium (hasta {timeout_s}s)...")
+    _log(f"\n[→] Paso 16 — Esperando pantalla principal Premium (hasta {timeout_s}s)...")
     fin = time.time() + timeout_s
 
     if os.path.isfile(_TEMPLATE_CONEXION):
@@ -826,9 +915,9 @@ def _esperar_premium_logueado(timeout_s: int = 30) -> bool:
             if _buscar_en_pantalla(_TEMPLATE_CONEXION, confidence=0.75) is None:
                 time.sleep(2)
                 _captura("paso_16_premium_logueado.png", "diálogo Conexión cerrado — Premium cargado")
-                print("[OK] Login exitoso — pantalla principal de Premium")
+                _log("[OK] Login exitoso — pantalla principal de Premium")
                 return True
-            print("  → Diálogo Conexión aún visible...")
+            _log("  → Diálogo Conexión aún visible...")
     else:
         hash_ant = None
         estables = 0
@@ -840,14 +929,14 @@ def _esperar_premium_logueado(timeout_s: int = 30) -> bool:
                 estables += 1
                 if estables >= 3:
                     _captura("paso_16_premium_logueado.png", "pantalla estable post-login")
-                    print("[OK] Pantalla estable — Premium cargado")
+                    _log("[OK] Pantalla estable — Premium cargado")
                     return True
             else:
                 estables = 0
-                print("  → Pantalla cambiando post-login...")
+                _log("  → Pantalla cambiando post-login...")
             hash_ant = h
 
-    print("[WARN] Timeout esperando pantalla principal de Premium")
+    _log("[WARN] Timeout esperando pantalla principal de Premium")
     _captura("paso_16_timeout.png", "timeout post-login")
     return False
 
@@ -898,7 +987,7 @@ def _calcular_offset_ventana() -> tuple[int, int]:
 
     template = _T("titlebar_oracle_forms.png")
     if not os.path.isfile(template):
-        print("  → titlebar_oracle_forms.png no disponible — usando coords de referencia")
+        _log("  → titlebar_oracle_forms.png no disponible — usando coords de referencia")
         return (0, 0)
 
     try:
@@ -907,13 +996,13 @@ def _calcular_offset_ventana() -> tuple[int, int]:
             match_left, match_top = int(loc.left), int(loc.top)
             dx = match_left - _TITLEBAR_REF[0]
             dy = match_top  - _TITLEBAR_REF[1]
-            print(f"  → Oracle Forms en ({match_left}, {match_top}) — offset ({dx:+d}, {dy:+d})")
+            _log(f"  → Oracle Forms en ({match_left}, {match_top}) — offset ({dx:+d}, {dy:+d})")
             return (dx, dy)
-        print("  → Titlebar no encontrado en pantalla — usando coords de referencia")
+        _log("  → Titlebar no encontrado en pantalla — usando coords de referencia")
     except pyautogui.ImageNotFoundException:
-        print("  → Titlebar no encontrado — usando coords absolutas de referencia")
+        _log("  → Titlebar no encontrado — usando coords absolutas de referencia")
     except Exception as exc:
-        print(f"  → Error buscando titlebar: {exc}")
+        _log(f"  → Error buscando titlebar: {exc}")
 
     return (0, 0)
 
@@ -925,7 +1014,7 @@ def _click_menu(nombre: str, dx: int, dy: int, espera: float = 0.5) -> None:
     ref_x, ref_y = _MENU_CLICKS_REF[nombre]
     x, y = ref_x + dx, ref_y + dy
     pyautogui.click(x, y)
-    print(f"  → Click '{nombre}' ({x}, {y})")
+    _log(f"  → Click '{nombre}' ({x}, {y})")
     time.sleep(espera)
 
 
@@ -950,7 +1039,7 @@ def _navegar_apertura_reclamo_clicks() -> bool:
     """
     import pyautogui
 
-    print("\n[→] Paso 17 — Navegando menu Premium → Apertura de Reclamo...")
+    _log("\n[→] Paso 17 — Navegando menu Premium → Apertura de Reclamo...")
     _captura("paso_17_inicio_navegacion.png", "antes de abrir menu")
 
     dx, dy = _calcular_offset_ventana()
@@ -960,14 +1049,14 @@ def _navegar_apertura_reclamo_clicks() -> bool:
     tb_y = _TITLEBAR_REF[1] + dy + 16
     pyautogui.click(tb_x, tb_y)
     time.sleep(0.3)
-    print(f"  → Foco Oracle Forms ({tb_x}, {tb_y})")
+    _log(f"  → Foco Oracle Forms ({tb_x}, {tb_y})")
 
     # ── 2. Click directo en "Premium" en la barra de menú ────────────────────
     # Evita el problema: Alt activa el menú pero el Right siguiente pierde foco.
     # Un click en el item del menubar abre el dropdown y retiene el foco.
     pm_x = _MENU_CLICKS_REF["Premium"][0] + dx
     pm_y = _MENU_CLICKS_REF["Premium"][1] + dy
-    print(f"  → Click en 'Premium' ({pm_x}, {pm_y})")
+    _log(f"  → Click en 'Premium' ({pm_x}, {pm_y})")
     pyautogui.click(pm_x, pm_y)
     time.sleep(1.20)   # esperar que abra el dropdown
 
@@ -993,13 +1082,13 @@ def _navegar_apertura_reclamo_clicks() -> bool:
                 if loc:
                     click_x = int(loc.left + loc.width  / 2)
                     click_y = int(loc.top  + loc.height / 2)
-                    print(f"  → template '{label}' encontrado en ({click_x}, {click_y})")
+                    _log(f"  → template '{label}' encontrado en ({click_x}, {click_y})")
                 else:
-                    print(f"  → template '{label}' no encontrado — usando coord ({approx_x}, {approx_y})")
+                    _log(f"  → template '{label}' no encontrado — usando coord ({approx_x}, {approx_y})")
             except pyautogui.ImageNotFoundException:
-                print(f"  → template '{label}' no encontrado — usando coord ({approx_x}, {approx_y})")
+                _log(f"  → template '{label}' no encontrado — usando coord ({approx_x}, {approx_y})")
             except Exception as exc:
-                print(f"  → template '{label}' error ({exc}) — usando coord ({approx_x}, {approx_y})")
+                _log(f"  → template '{label}' error ({exc}) — usando coord ({approx_x}, {approx_y})")
 
         # c) click en posición final
         pyautogui.click(click_x, click_y)
@@ -1012,7 +1101,7 @@ def _navegar_apertura_reclamo_clicks() -> bool:
     _menu_click("1.2.1.2-Apertura",      "1.2.1.1-Apertura", delay=1.20)
 
     _captura("paso_18_apertura_seleccionada.png", "post-navegacion")
-    print("[OK] Navegacion completada — 1.2.1.1-Apertura seleccionado")
+    _log("[OK] Navegacion completada — 1.2.1.1-Apertura seleccionado")
     return True
 
 
@@ -1043,7 +1132,7 @@ def _navegar_apertura_reclamo() -> bool:
     _DOWN_MANEJO    = 0   # 1er ítem → ya apuntado
     _DOWN_APERTURA  = 0   # 1er ítem → ya apuntado
 
-    print("\n[→] Paso 17 (teclado pywinauto) — Navegando menu Premium → Apertura...")
+    _log("\n[→] Paso 17 (teclado pywinauto) — Navegando menu Premium → Apertura...")
     _captura("paso_17_inicio_navegacion.png", "antes de abrir menu (teclado)")
 
     # Localizar ventana RDP por título
@@ -1051,9 +1140,9 @@ def _navegar_apertura_reclamo() -> bool:
         rdp = _rdp_win()
         rdp.set_focus()
         time.sleep(0.50)
-        print(f"  → Ventana RDP encontrada: '{rdp.window_text()}'")
+        _log(f"  → Ventana RDP encontrada: '{rdp.window_text()}'")
     except Exception as exc:
-        print(f"  [WARN] No se encontró ventana RDP: {exc} — abortando teclado")
+        _log(f"  [WARN] No se encontró ventana RDP: {exc} — abortando teclado")
         return False
 
     def _k(keys, n=1, pausa=0.35):
@@ -1061,69 +1150,69 @@ def _navegar_apertura_reclamo() -> bool:
         for _ in range(n):
             rdp.type_keys(keys, pause=0.05, with_spaces=True)
             time.sleep(pausa)
-            print(f"    {keys}")
+            _log(f"    {keys}")
 
     # 1. Click en titlebar — foco inicial para que Oracle Forms esté activo dentro del RDP
     dx, dy = _calcular_offset_ventana()
     tb_x = _TITLEBAR_REF[0] + dx + 100
     tb_y = _TITLEBAR_REF[1] + dy + 16
-    print(f"  → Click foco Oracle Forms ({tb_x}, {tb_y})")
+    _log(f"  → Click foco Oracle Forms ({tb_x}, {tb_y})")
     pyautogui.click(tb_x, tb_y)
     time.sleep(0.60)
 
     # 2. Alt → activa menubar
-    print("  → {VK_MENU} — activa menubar")
+    _log("  → {VK_MENU} — activa menubar")
     _k("{VK_MENU}", pausa=0.60)
 
     # 3. Right hasta "Premium"
-    print(f"  → {{RIGHT}} x{_RIGHT_PREMIUM} — llega a 'Premium'")
+    _log(f"  → {{RIGHT}} x{_RIGHT_PREMIUM} — llega a 'Premium'")
     _k("{RIGHT}", _RIGHT_PREMIUM, pausa=0.30)
     time.sleep(0.20)
 
     # 4. Down → abre dropdown Premium
-    print("  → {DOWN} — abre dropdown Premium")
+    _log("  → {DOWN} — abre dropdown Premium")
     _k("{DOWN}", pausa=0.60)
 
     # 5. Down hasta 1-Reclamos
-    print(f"  → {{DOWN}} x{_DOWN_RECLAMOS} — llega a '1-Reclamos'")
+    _log(f"  → {{DOWN}} x{_DOWN_RECLAMOS} — llega a '1-Reclamos'")
     _k("{DOWN}", _DOWN_RECLAMOS, pausa=0.25)
     time.sleep(0.20)
 
     # 6. Right → abre submenu 1-Reclamos
-    print("  → {RIGHT} — abre submenu '1-Reclamos'")
+    _log("  → {RIGHT} — abre submenu '1-Reclamos'")
     _k("{RIGHT}", pausa=0.60)
 
     # 7. Down hasta 1.2-Procesos
-    print(f"  → {{DOWN}} x{_DOWN_PROCESOS} — llega a '1.2-Procesos'")
+    _log(f"  → {{DOWN}} x{_DOWN_PROCESOS} — llega a '1.2-Procesos'")
     _k("{DOWN}", _DOWN_PROCESOS, pausa=0.25)
     time.sleep(0.20)
 
     # 8. Right → abre submenu 1.2-Procesos
-    print("  → {RIGHT} — abre submenu '1.2-Procesos'")
+    _log("  → {RIGHT} — abre submenu '1.2-Procesos'")
     _k("{RIGHT}", pausa=0.60)
 
     # 9. Down hasta 1.2.1-Manejo Reclamos
     if _DOWN_MANEJO:
-        print(f"  → {{DOWN}} x{_DOWN_MANEJO} — llega a '1.2.1-Manejo Reclamos'")
+        _log(f"  → {{DOWN}} x{_DOWN_MANEJO} — llega a '1.2.1-Manejo Reclamos'")
         _k("{DOWN}", _DOWN_MANEJO, pausa=0.25)
         time.sleep(0.20)
 
     # 10. Right → abre submenu 1.2.1-Manejo Reclamos
-    print("  → {RIGHT} — abre submenu '1.2.1-Manejo Reclamos'")
+    _log("  → {RIGHT} — abre submenu '1.2.1-Manejo Reclamos'")
     _k("{RIGHT}", pausa=0.60)
 
     # 11. Down hasta 1.2.1.1-Apertura
     if _DOWN_APERTURA:
-        print(f"  → {{DOWN}} x{_DOWN_APERTURA} — llega a '1.2.1.1-Apertura'")
+        _log(f"  → {{DOWN}} x{_DOWN_APERTURA} — llega a '1.2.1.1-Apertura'")
         _k("{DOWN}", _DOWN_APERTURA, pausa=0.25)
         time.sleep(0.20)
 
     # 12. Enter → selecciona 1.2.1.1-Apertura
-    print("  → {ENTER} — selecciona '1.2.1.1-Apertura'")
+    _log("  → {ENTER} — selecciona '1.2.1.1-Apertura'")
     _k("{ENTER}", pausa=1.20)
 
     _captura("paso_18_apertura_seleccionada.png", "post-navegacion teclado")
-    print("[OK] Navegacion teclado completada")
+    _log("[OK] Navegacion teclado completada")
     return True
 
 
@@ -1137,7 +1226,7 @@ def _esperar_consulta_endosos(timeout_s: int = 15) -> bool:
     import pyautogui
     import hashlib
 
-    print(f"\n[→] Paso 19 — Esperando formulario 'Consulta de Endosos' (hasta {timeout_s}s)...")
+    _log(f"\n[→] Paso 19 — Esperando formulario 'Consulta de Endosos' (hasta {timeout_s}s)...")
     fin = time.time() + timeout_s
     template = _T("form_consulta_endosos.png")
 
@@ -1145,11 +1234,11 @@ def _esperar_consulta_endosos(timeout_s: int = 15) -> bool:
         while time.time() < fin:
             if _buscar_en_pantalla(template, confidence=0.75):
                 _captura("paso_19_consulta_endosos.png", "formulario Consulta de Endosos abierto")
-                print("[OK] Formulario 'Consulta de Endosos' detectado")
+                _log("[OK] Formulario 'Consulta de Endosos' detectado")
                 return True
             time.sleep(1.0)
     else:
-        print("  → Sin template — esperando estabilidad de pantalla")
+        _log("  → Sin template — esperando estabilidad de pantalla")
         hash_ant, estables = None, 0
         while time.time() < fin:
             time.sleep(1.5)
@@ -1158,13 +1247,13 @@ def _esperar_consulta_endosos(timeout_s: int = 15) -> bool:
                 estables += 1
                 if estables >= 2:
                     _captura("paso_19_consulta_endosos.png", "pantalla estable — formulario listo")
-                    print("[OK] Pantalla estable — formulario listo")
+                    _log("[OK] Pantalla estable — formulario listo")
                     return True
             else:
                 estables = 0
             hash_ant = h
 
-    print("[WARN] Timeout esperando 'Consulta de Endosos'")
+    _log("[WARN] Timeout esperando 'Consulta de Endosos'")
     _captura("paso_19_timeout.png", "timeout")
     return False
 
@@ -1194,9 +1283,9 @@ def _ingresar_poliza_y_fecha(numero_poliza: str, fecha_siniestro: str) -> bool:
 
     partes_poliza = numero_poliza.split("-")  # ["02", "98", "1246363", "0"]
 
-    print(f"\n[→] Paso 20 — Llenando Consulta de Endosos...")
-    print(f"  → Póliza: {numero_poliza} ({len(partes_poliza)} partes)")
-    print(f"  → Fecha siniestro: {fecha_siniestro} → {fecha_of}")
+    _log(f"\n[→] Paso 20 — Llenando Consulta de Endosos...")
+    _log(f"  → Póliza: {numero_poliza} ({len(partes_poliza)} partes)")
+    _log(f"  → Fecha siniestro: {fecha_siniestro} → {fecha_of}")
 
     # Localizar ventana RDP
     try:
@@ -1204,36 +1293,36 @@ def _ingresar_poliza_y_fecha(numero_poliza: str, fecha_siniestro: str) -> bool:
         rdp.set_focus()
         time.sleep(0.40)
     except Exception as exc:
-        print(f"  [WARN] Ventana RDP no encontrada: {exc}")
+        _log(f"  [WARN] Ventana RDP no encontrada: {exc}")
         return False
 
     def _k(keys, pausa=0.20):
         rdp.type_keys(keys, pause=0.05, with_spaces=True)
         time.sleep(pausa)
-        print(f"    {keys}")
+        _log(f"    {keys}")
 
     # Llenar las 4 partes de la póliza — sin ctrl+a, el campo está vacío al abrirse
     for i, parte in enumerate(partes_poliza):
         _k(parte, pausa=0.15)
         _k("{TAB}", pausa=0.20)
-        print(f"  → Parte {i+1}: '{parte}'")
+        _log(f"  → Parte {i+1}: '{parte}'")
 
     _captura("paso_20_poliza_ingresada.png", f"póliza {numero_poliza} ingresada")
 
     # Navegar hasta Fecha del Siniestro con Tabs
-    print(f"  → {_TABS_HASTA_FECHA} Tabs hasta Fecha del Siniestro")
+    _log(f"  → {_TABS_HASTA_FECHA} Tabs hasta Fecha del Siniestro")
     for _ in range(_TABS_HASTA_FECHA):
         _k("{TAB}", pausa=0.15)
 
     # Escribir fecha
     _k(fecha_of, pausa=0.20)
     _captura("paso_20_fecha_ingresada.png", f"fecha {fecha_of} ingresada")
-    print(f"  → Fecha: {fecha_of}")
+    _log(f"  → Fecha: {fecha_of}")
 
     # F8 — ejecutar consulta
     _k("{F8}", pausa=1.50)
     _captura("paso_21_f8_ejecutado.png", "F8 ejecutado — esperando resultados")
-    print("[OK] F8 ejecutado — consulta enviada")
+    _log("[OK] F8 ejecutado — consulta enviada")
 
     return True
 
@@ -1257,7 +1346,7 @@ def _cerrar_popup_forms_si_existe() -> bool:
     _captura("popup_forms_detectado.png", "popup Forms detectado")
     pyautogui.hotkey("enter")
     time.sleep(0.6)
-    print("  → Popup Forms cerrado (Enter/OK)")
+    _log("  → Popup Forms cerrado (Enter/OK)")
     return True
 
 
@@ -1272,17 +1361,17 @@ def _cerrar_pantalla_automovil_y_endosos() -> None:
     import pyautogui
 
     # -- Cierre 1: Automóviles Asegurados --
-    print("  → Cerrando Consulta de Automóviles Asegurados...")
+    _log("  → Cerrando Consulta de Automóviles Asegurados...")
     _cerrar_formulario_consulta_endosos()   # reutiliza el click X
 
     # Puede aparecer un diálogo de confirmación tras cerrar Automóviles
     time.sleep(0.5)
     if _cerrar_popup_forms_si_existe():
-        print("  → Confirmación post-cierre cerrada (Enter)")
+        _log("  → Confirmación post-cierre cerrada (Enter)")
 
     # -- Cierre 2: Consulta de Endosos --
     time.sleep(0.5)
-    print("  → Cerrando Consulta de Endosos...")
+    _log("  → Cerrando Consulta de Endosos...")
     _cerrar_formulario_consulta_endosos()
 
 
@@ -1303,10 +1392,10 @@ def _cerrar_formulario_consulta_endosos() -> None:
                 pyautogui.click(cx, cy)
                 time.sleep(0.80)
                 _captura("consulta_endosos_cerrada.png", "formulario cerrado via X")
-                print("  → Formulario Consulta de Endosos cerrado (click X)")
+                _log("  → Formulario Consulta de Endosos cerrado (click X)")
                 return
         except Exception as exc:
-            print(f"  [WARN] Template X no encontrado: {exc}")
+            _log(f"  [WARN] Template X no encontrado: {exc}")
 
     # Fallback teclado
     try:
@@ -1319,7 +1408,7 @@ def _cerrar_formulario_consulta_endosos() -> None:
     pyautogui.hotkey("ctrl", "f4")
     time.sleep(0.80)
     _captura("consulta_endosos_cerrada.png", "formulario cerrado Ctrl+F4 fallback")
-    print("  → Formulario cerrado (Ctrl+F4 fallback)")
+    _log("  → Formulario cerrado (Ctrl+F4 fallback)")
 
 
 def _extraer_datos_automovil() -> dict:
@@ -1334,7 +1423,7 @@ def _extraer_datos_automovil() -> dict:
 
     _captura("paso_23_consulta_automovil.png", "Consulta de Automóviles Asegurados")
 
-    print("\n[→] Paso 23 — Extrayendo datos del automóvil asegurado...")
+    _log("\n[→] Paso 23 — Extrayendo datos del automóvil asegurado...")
 
     try:
         import pytesseract
@@ -1345,15 +1434,15 @@ def _extraer_datos_automovil() -> dict:
         )
         texto = pytesseract.image_to_string(img, lang="spa")
         lineas = [l.strip() for l in texto.splitlines() if l.strip()]
-        print(f"  → OCR: {len(lineas)} líneas extraídas")
+        _log(f"  → OCR: {len(lineas)} líneas extraídas")
         for linea in lineas:
-            print(f"    {linea}")
-        print("[OK] Datos automóvil extraídos")
+            _log(f"    {linea}")
+        _log("[OK] Datos automóvil extraídos")
         return {"raw_ocr": texto}
 
     except (ImportError, Exception) as exc:
-        print(f"  [WARN] OCR no disponible ({type(exc).__name__}) — captura guardada, extracción pendiente")
-        print("[OK] Captura guardada en paso_23_consulta_automovil.png")
+        _log(f"  [WARN] OCR no disponible ({type(exc).__name__}) — captura guardada, extracción pendiente")
+        _log("[OK] Captura guardada en paso_23_consulta_automovil.png")
         return {}
 
 
@@ -1366,11 +1455,11 @@ def _click_boton_coberturas_auto() -> bool:
     """
     import pyautogui
 
-    print("\n[→] Paso 24 — Click botón Coberturas del Auto...")
+    _log("\n[→] Paso 24 — Click botón Coberturas del Auto...")
     template = _T("boton_coberturas_auto.png")
 
     if not os.path.isfile(template):
-        print("  [WARN] Template boton_coberturas_auto.png no encontrado — saltando paso")
+        _log("  [WARN] Template boton_coberturas_auto.png no encontrado — saltando paso")
         return False
 
     try:
@@ -1381,14 +1470,14 @@ def _click_boton_coberturas_auto() -> bool:
             pyautogui.click(cx, cy)
             time.sleep(1.0)
             _captura("paso_24_coberturas_click.png", "botón Coberturas clickeado")
-            print(f"  → Botón encontrado y clickeado en ({cx}, {cy})")
+            _log(f"  → Botón encontrado y clickeado en ({cx}, {cy})")
             return True
         else:
-            print("  [WARN] Botón coberturas no encontrado en pantalla")
+            _log("  [WARN] Botón coberturas no encontrado en pantalla")
     except pyautogui.ImageNotFoundException:
-        print("  [WARN] Botón coberturas no encontrado en pantalla")
+        _log("  [WARN] Botón coberturas no encontrado en pantalla")
     except Exception as exc:
-        print(f"  [WARN] Error buscando botón coberturas: {exc}")
+        _log(f"  [WARN] Error buscando botón coberturas: {exc}")
 
     return False
 
@@ -1408,7 +1497,7 @@ def _seleccionar_cobertura_colision_vuelco() -> bool:
 
     _DOWNS_HASTA_COLISION = 4   # A→B→C→D→E
 
-    print("\n[→] Paso 25 — Seleccionando cobertura Colisión o Vuelco...")
+    _log("\n[→] Paso 25 — Seleccionando cobertura Colisión o Vuelco...")
     _captura("paso_25_inicio_coberturas.png", "Consulta de Coberturas abierta")
 
     # Navegar con teclado directo a la ventana RDP
@@ -1417,16 +1506,16 @@ def _seleccionar_cobertura_colision_vuelco() -> bool:
         rdp.set_focus()
         time.sleep(0.30)
     except Exception as exc:
-        print(f"  [WARN] Ventana RDP no encontrada: {exc}")
+        _log(f"  [WARN] Ventana RDP no encontrada: {exc}")
         return False
 
     def _k(keys, n=1, pausa=0.25):
         for _ in range(n):
             rdp.type_keys(keys, pause=0.05, with_spaces=True)
             time.sleep(pausa)
-            print(f"    {keys}")
+            _log(f"    {keys}")
 
-    print(f"  → Down x{_DOWNS_HASTA_COLISION} — llega a 'E - POR COLISIÓN O VUELCO'")
+    _log(f"  → Down x{_DOWNS_HASTA_COLISION} — llega a 'E - POR COLISIÓN O VUELCO'")
     _k("{DOWN}", _DOWNS_HASTA_COLISION)
     time.sleep(0.30)
     _captura("paso_25_fila_colision_seleccionada.png", "fila Colisión o Vuelco activa")
@@ -1434,7 +1523,7 @@ def _seleccionar_cobertura_colision_vuelco() -> bool:
     # Click al botón seleccionar (manito)
     template = _T("boton_seleccionar_cobertura.png")
     if not os.path.isfile(template):
-        print("  [WARN] Template boton_seleccionar_cobertura.png no encontrado — saltando click")
+        _log("  [WARN] Template boton_seleccionar_cobertura.png no encontrado — saltando click")
         return False
 
     try:
@@ -1445,14 +1534,14 @@ def _seleccionar_cobertura_colision_vuelco() -> bool:
             pyautogui.click(cx, cy)
             time.sleep(1.0)
             _captura("paso_25_cobertura_seleccionada.png", "cobertura seleccionada")
-            print(f"  → Botón seleccionar clickeado en ({cx}, {cy})")
+            _log(f"  → Botón seleccionar clickeado en ({cx}, {cy})")
             return True
         else:
-            print("  [WARN] Botón seleccionar no encontrado en pantalla")
+            _log("  [WARN] Botón seleccionar no encontrado en pantalla")
     except pyautogui.ImageNotFoundException:
-        print("  [WARN] Botón seleccionar no encontrado en pantalla")
+        _log("  [WARN] Botón seleccionar no encontrado en pantalla")
     except Exception as exc:
-        print(f"  [WARN] Error buscando botón: {exc}")
+        _log(f"  [WARN] Error buscando botón: {exc}")
 
     return False
 
@@ -1485,7 +1574,7 @@ def _llenar_generales_1(tipo_siniestro_codigo: str = "30",
 
     hoy = date.today().strftime("%d-%m-%Y")
 
-    print("\n[→] Paso 26 — Llenando Generales (1)...")
+    _log("\n[→] Paso 26 — Llenando Generales (1)...")
     _captura("paso_26_inicio_generales1.png", "Apertura del Reclamo — Generales (1)")
 
     try:
@@ -1493,7 +1582,7 @@ def _llenar_generales_1(tipo_siniestro_codigo: str = "30",
         rdp.set_focus()
         time.sleep(0.30)
     except Exception as exc:
-        print(f"  [WARN] Ventana RDP no encontrada: {exc}")
+        _log(f"  [WARN] Ventana RDP no encontrada: {exc}")
         return False
 
     def _k(keys, n=1, pausa=0.25):
@@ -1505,7 +1594,7 @@ def _llenar_generales_1(tipo_siniestro_codigo: str = "30",
         """Localiza la etiqueta y clickea offset_x px a su derecha."""
         tpl = _T(template_name)
         if not os.path.isfile(tpl):
-            print(f"  [WARN] Template {template_name} no encontrado")
+            _log(f"  [WARN] Template {template_name} no encontrado")
             return False
         try:
             loc = pyautogui.locateOnScreen(tpl, confidence=0.80)
@@ -1514,20 +1603,20 @@ def _llenar_generales_1(tipo_siniestro_codigo: str = "30",
                 cy = int(loc.top  + loc.height / 2 + offset_y)
                 pyautogui.click(cx, cy)
                 time.sleep(0.40)
-                print(f"  → Click '{label}' ({cx}, {cy})")
+                _log(f"  → Click '{label}' ({cx}, {cy})")
                 return True
-            print(f"  [WARN] Etiqueta '{label}' no encontrada en pantalla")
+            _log(f"  [WARN] Etiqueta '{label}' no encontrada en pantalla")
         except Exception as exc:
-            print(f"  [WARN] Error buscando '{label}': {exc}")
+            _log(f"  [WARN] Error buscando '{label}': {exc}")
         return False
 
     # ── 1. Fecha de Recibo de Documentos — click en campo + fecha de hoy ─────
     if _click_label("campo_fecha_recibo_docs.png", label="Fecha Recibo Docs"):
         _k(hoy, pausa=0.20)
         _captura("paso_26_fecha_recibo.png", f"Fecha Recibo Documentos: {hoy}")
-        print(f"  → Fecha de Recibo: {hoy}")
+        _log(f"  → Fecha de Recibo: {hoy}")
     else:
-        print("  [WARN] Saltando Fecha de Recibo — template no disponible")
+        _log("  [WARN] Saltando Fecha de Recibo — template no disponible")
 
     # ── 2. Tipo de siniestro ─────────────────────────────────────────────────
     # Flujo Oracle Forms LOV:
@@ -1537,7 +1626,7 @@ def _llenar_generales_1(tipo_siniestro_codigo: str = "30",
         _k(tipo_siniestro_codigo, pausa=0.40)  # ej. "30" → autocompleta COLISION
         _k("{TAB}", pausa=0.80)       # autocompleta el tipo → abre modal Descripción automáticamente
         _captura("paso_26_tipo_siniestro.png", "tipo de siniestro seleccionado")
-        print(f"  → Tipo de siniestro '{tipo_siniestro_codigo}' aceptado")
+        _log(f"  → Tipo de siniestro '{tipo_siniestro_codigo}' aceptado")
 
     # ── 3. Descripción del Siniestro — modal ya abierto automáticamente ──────
     # No hace falta click — el modal abre solo al aceptar el tipo de siniestro.
@@ -1546,23 +1635,23 @@ def _llenar_generales_1(tipo_siniestro_codigo: str = "30",
     _k("{TAB}", pausa=0.30)
     _k("{TAB}", pausa=0.30)
     _k("{ENTER}", pausa=0.60)
-    print(f"  → Descripción ingresada: '{descripcion}'")
+    _log(f"  → Descripción ingresada: '{descripcion}'")
 
     _captura("paso_26_descripcion_siniestro.png", "descripción ingresada")
 
     # ── 4. Hora del siniestro ────────────────────────────────────────────────
     if _click_label("campo_hora_siniestro.png", label="Hora Siniestro"):
         _k(hora_siniestro, pausa=0.20)
-        print(f"  → Hora: {hora_siniestro}")
+        _log(f"  → Hora: {hora_siniestro}")
 
     # ── 5. Lugar del siniestro ───────────────────────────────────────────────
     if _click_label("campo_lugar_siniestro.png", label="Lugar Siniestro"):
         _k(lugar_siniestro, pausa=0.20)
-        print(f"  → Lugar: {lugar_siniestro}")
+        _log(f"  → Lugar: {lugar_siniestro}")
 
     _captura("paso_26_generales1_completo.png", "Generales (1) completo")
     _verificar_sin_modal_frm("generales1")
-    print("[OK] Generales (1) completado")
+    _log("[OK] Generales (1) completado")
     return True
 
 
@@ -1595,7 +1684,7 @@ def _llenar_generales_2(cedula: str = "8-123-456",
 
     _OFFSET_INPUT = 200
 
-    print("\n[→] Paso 27 — Generales (2): datos del Conductor...")
+    _log("\n[→] Paso 27 — Generales (2): datos del Conductor...")
     _captura("paso_27_inicio_generales2.png", "antes de click en pestaña Generales (2)")
 
     try:
@@ -1603,7 +1692,7 @@ def _llenar_generales_2(cedula: str = "8-123-456",
         rdp.set_focus()
         time.sleep(0.30)
     except Exception as exc:
-        print(f"  [WARN] Ventana RDP no encontrada: {exc}")
+        _log(f"  [WARN] Ventana RDP no encontrada: {exc}")
         return False
 
     def _k(keys, n=1, pausa=0.25):
@@ -1622,13 +1711,13 @@ def _llenar_generales_2(cedula: str = "8-123-456",
             if loc:
                 pyautogui.click(int(loc.left + loc.width / 2), int(loc.top + loc.height / 2))
                 time.sleep(0.80)
-                print("  → Click pestaña Generales (2)")
+                _log("  → Click pestaña Generales (2)")
             else:
-                print("  [WARN] Pestaña Generales (2) no encontrada en pantalla")
+                _log("  [WARN] Pestaña Generales (2) no encontrada en pantalla")
         except Exception as exc:
-            print(f"  [WARN] Error buscando pestaña: {exc}")
+            _log(f"  [WARN] Error buscando pestaña: {exc}")
     else:
-        print("  [WARN] tab_generales_2.png no disponible")
+        _log("  [WARN] tab_generales_2.png no disponible")
 
     _captura("paso_27_generales2_abierto.png", "Generales (2) activo")
 
@@ -1640,16 +1729,16 @@ def _llenar_generales_2(cedula: str = "8-123-456",
             if loc:
                 pyautogui.click(int(loc.left + _OFFSET_INPUT), int(loc.top + loc.height / 2))
                 time.sleep(0.30)
-                print("  → Click Lugar donde se encuentra")
+                _log("  → Click Lugar donde se encuentra")
             else:
-                print("  [WARN] Lugar donde se encuentra no encontrado en pantalla")
+                _log("  [WARN] Lugar donde se encuentra no encontrado en pantalla")
         except Exception as exc:
-            print(f"  [WARN] campo_lugar_conductor.png: {exc}")
+            _log(f"  [WARN] campo_lugar_conductor.png: {exc}")
     else:
-        print("  [WARN] campo_lugar_conductor.png no disponible — saltando Lugar")
+        _log("  [WARN] campo_lugar_conductor.png no disponible — saltando Lugar")
     pyautogui.write("Panama", interval=0.05)
     _k("{TAB}", pausa=0.30)
-    print("  → Lugar donde se encuentra: Panama")
+    _log("  → Lugar donde se encuentra: Panama")
 
     # ── 2. Cédula → Enter → detectar modal por cambio de pantalla ────────────
     cedula_tpl = _T("campo_cedula_conductor.png")
@@ -1659,31 +1748,31 @@ def _llenar_generales_2(cedula: str = "8-123-456",
             if loc:
                 pyautogui.click(int(loc.left + _OFFSET_INPUT), int(loc.top + loc.height / 2))
                 time.sleep(0.40)
-                print(f"  → Click Cédula")
+                _log(f"  → Click Cédula")
         except Exception as exc:
-            print(f"  [WARN] campo_cedula_conductor.png: {exc}")
+            _log(f"  [WARN] campo_cedula_conductor.png: {exc}")
 
     _k(cedula, pausa=0.20)
     hash_antes = _screenshot_hash()
     _k("{ENTER}", pausa=0.80)
     hash_despues = _screenshot_hash()
 
-    print(f"  → Cédula: {cedula}")
+    _log(f"  → Cédula: {cedula}")
     if hash_antes != hash_despues:
         # Pantalla cambió → modal "El Conductor no ha sido declarado en la Póliza"
         _k("{ENTER}", pausa=0.50)
-        print("  → Modal cédula detectado — Enter para cerrar")
+        _log("  → Modal cédula detectado — Enter para cerrar")
     _captura("paso_27_cedula.png", "cédula ingresada")
 
     # ── 3. Nombre → Enter ─────────────────────────────────────────────────────
     _k(nombre, pausa=0.20)
     _k("{ENTER}", pausa=0.30)
-    print(f"  → Nombre: {nombre}")
+    _log(f"  → Nombre: {nombre}")
 
     # ── 4. Apellido → Enter ───────────────────────────────────────────────────
     _k(apellido, pausa=0.20)
     _k("{ENTER}", pausa=0.30)
-    print(f"  → Apellido: {apellido}")
+    _log(f"  → Apellido: {apellido}")
 
     # ── 5. Sexo — Left abre dropdown en FEMENINO, Up sube a MASCULINO ─────────
     # Right abre el dropdown. Luego Up navega: Up×1=FEMENINO, Up×2=MASCULINO.
@@ -1692,48 +1781,48 @@ def _llenar_generales_2(cedula: str = "8-123-456",
         _k("{UP}",    pausa=0.20)   # → FEMENINO
         _k("{ENTER}", pausa=0.20)   # selecciona
         _k("{ENTER}", pausa=0.30)   # avanza al siguiente campo
-        print("  → Sexo: FEMENINO")
+        _log("  → Sexo: FEMENINO")
     elif sexo.upper() == "M":
         _k("{RIGHT}", pausa=0.30)   # abre dropdown
         _k("{UP}",    pausa=0.20)   # → FEMENINO
         _k("{UP}",    pausa=0.20)   # → MASCULINO
         _k("{ENTER}", pausa=0.20)   # selecciona
         _k("{ENTER}", pausa=0.30)   # avanza al siguiente campo
-        print("  → Sexo: MASCULINO")
+        _log("  → Sexo: MASCULINO")
     else:
         _k("{ENTER}", pausa=0.30)   # en blanco, avanza
-        print("  → Sexo: en blanco")
+        _log("  → Sexo: en blanco")
 
     # ── 6. Edad → Enter ───────────────────────────────────────────────────────
     _k(str(edad), pausa=0.20)
     _k("{ENTER}", pausa=0.30)
-    print(f"  → Edad: {edad}")
+    _log(f"  → Edad: {edad}")
 
     # ── 7. Teléfono Residencial → Enter ───────────────────────────────────────
     _k(tel_residencial, pausa=0.20)
     _k("{ENTER}", pausa=0.30)
-    print(f"  → Tel. Residencial: {tel_residencial}")
+    _log(f"  → Tel. Residencial: {tel_residencial}")
 
     # ── 8. Teléfono Oficina → Enter ───────────────────────────────────────────
     _k(tel_oficina, pausa=0.20)
     _k("{ENTER}", pausa=0.30)
-    print(f"  → Tel. Oficina: {tel_oficina}")
+    _log(f"  → Tel. Oficina: {tel_oficina}")
 
     # ── 9. Relación con el Asegurado → Enter → radio Se Declara ──────────────
     _k(relacion, pausa=0.20)
     _k("{ENTER}", pausa=0.40)
-    print(f"  → Relación: {relacion}")
+    _log(f"  → Relación: {relacion}")
 
     # ── 10. Se Declara — Inocente es default, Left cambia a Culpable ───────────
     if responsabilidad == "Culpable":
         _k("{LEFT}", pausa=0.30)
-        print("  → Se Declara: Culpable")
+        _log("  → Se Declara: Culpable")
     else:
-        print("  → Se Declara: Inocente (default)")
+        _log("  → Se Declara: Inocente (default)")
 
     _captura("paso_27_generales2_completo.png", "Generales (2) completo")
     _verificar_sin_modal_frm("generales2")
-    print("[OK] Generales (2) completado")
+    _log("[OK] Generales (2) completado")
     return True
 
 
@@ -1746,11 +1835,11 @@ def _click_boton_consultar_unidades() -> bool:
     """
     import pyautogui
 
-    print("\n[→] Paso 22 — Click botón Consultar Unidades...")
+    _log("\n[→] Paso 22 — Click botón Consultar Unidades...")
     template = _T("boton_consultar_unidades.png")
 
     if not os.path.isfile(template):
-        print("  [WARN] Template boton_consultar_unidades.png no encontrado — saltando paso")
+        _log("  [WARN] Template boton_consultar_unidades.png no encontrado — saltando paso")
         return False
 
     try:
@@ -1761,14 +1850,14 @@ def _click_boton_consultar_unidades() -> bool:
             pyautogui.click(cx, cy)
             time.sleep(1.0)
             _captura("paso_22_boton_consultar_click.png", "botón Consultar Unidades clickeado")
-            print(f"  → Botón encontrado y clickeado en ({cx}, {cy})")
+            _log(f"  → Botón encontrado y clickeado en ({cx}, {cy})")
             return True
         else:
-            print("  [WARN] Botón no encontrado en pantalla")
+            _log("  [WARN] Botón no encontrado en pantalla")
     except pyautogui.ImageNotFoundException:
-        print("  [WARN] Botón no encontrado en pantalla")
+        _log("  [WARN] Botón no encontrado en pantalla")
     except Exception as exc:
-        print(f"  [WARN] Error buscando botón: {exc}")
+        _log(f"  [WARN] Error buscando botón: {exc}")
 
     return False
 
@@ -1789,7 +1878,7 @@ def _llenar_generales_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
 
     _OFFSET_INPUT = 200
 
-    print("\n[→] Paso 28 — Generales (3): descripción de daños + ajustador...")
+    _log("\n[→] Paso 28 — Generales (3): descripción de daños + ajustador...")
     _captura("paso_28_inicio_generales3.png", "antes de click en pestaña Generales (3)")
 
     try:
@@ -1797,7 +1886,7 @@ def _llenar_generales_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
         rdp.set_focus()
         time.sleep(0.30)
     except Exception as exc:
-        print(f"  [WARN] Ventana RDP no encontrada: {exc}")
+        _log(f"  [WARN] Ventana RDP no encontrada: {exc}")
         return False
 
     def _k(keys, n=1, pausa=0.25):
@@ -1808,7 +1897,7 @@ def _llenar_generales_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
     def _click_label(template_name, offset_x=_OFFSET_INPUT, offset_y=0, label=""):
         tpl = _T(template_name)
         if not os.path.isfile(tpl):
-            print(f"  [WARN] Template {template_name} no encontrado")
+            _log(f"  [WARN] Template {template_name} no encontrado")
             return False
         try:
             loc = pyautogui.locateOnScreen(tpl, confidence=0.80)
@@ -1817,11 +1906,11 @@ def _llenar_generales_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
                 cy = int(loc.top  + loc.height / 2 + offset_y)
                 pyautogui.click(cx, cy)
                 time.sleep(0.40)
-                print(f"  → Click '{label}' ({cx}, {cy})")
+                _log(f"  → Click '{label}' ({cx}, {cy})")
                 return True
-            print(f"  [WARN] '{label}' no encontrado en pantalla")
+            _log(f"  [WARN] '{label}' no encontrado en pantalla")
         except Exception as exc:
-            print(f"  [WARN] Error buscando '{label}': {exc}")
+            _log(f"  [WARN] Error buscando '{label}': {exc}")
         return False
 
     # ── 0. Click pestaña Generales (3) ───────────────────────────────────────
@@ -1837,11 +1926,11 @@ def _llenar_generales_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
                 cy = int(loc.top  + loc.height / 2)
                 pyautogui.click(cx, cy)
                 time.sleep(0.80)
-                print(f"  → Click pestaña Generales (3) via offset desde G2 ({cx}, {cy})")
+                _log(f"  → Click pestaña Generales (3) via offset desde G2 ({cx}, {cy})")
             else:
-                print("  [WARN] tab_generales_2.png no encontrado — no se pudo navegar a G3")
+                _log("  [WARN] tab_generales_2.png no encontrado — no se pudo navegar a G3")
         except Exception as exc:
-            print(f"  [WARN] Error buscando pestaña: {exc}")
+            _log(f"  [WARN] Error buscando pestaña: {exc}")
 
     _captura("paso_28_generales3_abierto.png", "Generales (3) activo")
 
@@ -1853,18 +1942,18 @@ def _llenar_generales_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
         _k("{TAB}", pausa=0.20)
         _k("{ENTER}", pausa=0.60)
         _captura("paso_28_descripcion_danos.png", "descripción de daños ingresada")
-        print(f"  → Descripción de daños: '{descripcion_danos}'")
+        _log(f"  → Descripción de daños: '{descripcion_danos}'")
 
     # ── 2. Ajustador Interno → código → Enter ─────────────────────────────────
     if _click_label("campo_ajustador_interno.png", offset_x=100, offset_y=-8, label="Ajustador Interno"):
         _k(ajustador_interno, pausa=0.20)
         _k("{ENTER}", pausa=0.50)
         _captura("paso_28_ajustador.png", f"ajustador interno {ajustador_interno}")
-        print(f"  → Ajustador Interno: {ajustador_interno}")
+        _log(f"  → Ajustador Interno: {ajustador_interno}")
 
     _captura("paso_28_generales3_completo.png", "Generales (3) completo")
     _verificar_sin_modal_frm("generales3")
-    print("[OK] Generales (3) completado")
+    _log("[OK] Generales (3) completado")
     return True
 
 
@@ -1884,7 +1973,7 @@ def _llenar_reservas(cobertura_codigo: str = "E",
     import pyautogui
     from pywinauto import Desktop
 
-    print("\n[→] Paso 29 — Reservas: cobertura + monto...")
+    _log("\n[→] Paso 29 — Reservas: cobertura + monto...")
     _captura("paso_29_inicio_reservas.png", "antes de click en pestaña Reservas")
 
     try:
@@ -1892,7 +1981,7 @@ def _llenar_reservas(cobertura_codigo: str = "E",
         rdp.set_focus()
         time.sleep(0.30)
     except Exception as exc:
-        print(f"  [WARN] Ventana RDP no encontrada: {exc}")
+        _log(f"  [WARN] Ventana RDP no encontrada: {exc}")
         return False
 
     def _k(keys, n=1, pausa=0.25):
@@ -1908,15 +1997,15 @@ def _llenar_reservas(cobertura_codigo: str = "E",
             if loc:
                 pyautogui.click(int(loc.left + loc.width / 2), int(loc.top + loc.height / 2))
                 time.sleep(0.80)
-                print("  → Click pestaña Reservas")
+                _log("  → Click pestaña Reservas")
             else:
-                print("  [WARN] Pestaña Reservas no encontrada (confidence 0.85)")
+                _log("  [WARN] Pestaña Reservas no encontrada (confidence 0.85)")
         except pyautogui.ImageNotFoundException:
-            print("  [WARN] Pestaña Reservas no encontrada en pantalla")
+            _log("  [WARN] Pestaña Reservas no encontrada en pantalla")
         except Exception as exc:
-            print(f"  [WARN] Error buscando pestaña Reservas: {exc}")
+            _log(f"  [WARN] Error buscando pestaña Reservas: {exc}")
     else:
-        print("  [WARN] tab_reservas.png no disponible")
+        _log("  [WARN] tab_reservas.png no disponible")
 
     _captura("paso_29_reservas_abierto.png", "pestaña Reservas activa")
 
@@ -1931,32 +2020,32 @@ def _llenar_reservas(cobertura_codigo: str = "E",
                 pyautogui.click(cx, cy)
                 time.sleep(0.80)
                 _captura("paso_29_celda_cobertura.png", "celda Cobertura clickeada")
-                print(f"  → Click primera celda Cobertura ({cx}, {cy})")
+                _log(f"  → Click primera celda Cobertura ({cx}, {cy})")
                 time.sleep(0.60)
                 _k(cobertura_codigo, pausa=0.30)
                 time.sleep(0.60)
                 _captura("paso_29_codigo_escrito.png", f"código '{cobertura_codigo}' escrito")
                 _k("{ENTER}", pausa=0.80)
                 _captura("paso_29_cobertura.png", f"cobertura '{cobertura_codigo}' ingresada")
-                print(f"  → Cobertura: {cobertura_codigo}")
+                _log(f"  → Cobertura: {cobertura_codigo}")
             else:
-                print("  [WARN] Encabezado Cobertura no encontrado (confidence 0.80)")
+                _log("  [WARN] Encabezado Cobertura no encontrado (confidence 0.80)")
         except pyautogui.ImageNotFoundException:
-            print("  [WARN] Encabezado Cobertura no encontrado en pantalla")
+            _log("  [WARN] Encabezado Cobertura no encontrado en pantalla")
         except Exception as exc:
-            print(f"  [WARN] Error buscando columna Cobertura: {exc}")
+            _log(f"  [WARN] Error buscando columna Cobertura: {exc}")
     else:
-        print("  [WARN] col_cobertura_reservas.png no disponible")
+        _log("  [WARN] col_cobertura_reservas.png no disponible")
 
     # ── 2. Monto de Reserva ───────────────────────────────────────────────────
     time.sleep(0.60)
     _k(monto_reserva, pausa=0.30)
     time.sleep(0.60)
     _captura("paso_29_monto_reserva.png", f"monto {monto_reserva} ingresado — listo para guardar")
-    print(f"  → Monto de Reserva: {monto_reserva}")
+    _log(f"  → Monto de Reserva: {monto_reserva}")
 
     _verificar_sin_modal_frm("reservas")
-    print("[OK] Reservas completado")
+    _log("[OK] Reservas completado")
     return True
 
 
@@ -1977,14 +2066,14 @@ def _guardar_reclamo() -> str | None:
     import pyautogui
     from pywinauto import Desktop
 
-    print("\n[→] Paso 30 — GUARDANDO RECLAMO...")
+    _log("\n[→] Paso 30 — GUARDANDO RECLAMO...")
 
     try:
         rdp = _rdp_win()
         rdp.set_focus()
         time.sleep(0.40)
     except Exception as exc:
-        print(f"  [WARN] Ventana RDP no encontrada: {exc}")
+        _log(f"  [WARN] Ventana RDP no encontrada: {exc}")
         return None
 
     def _k(keys, n=1, pausa=0.40):
@@ -1997,7 +2086,7 @@ def _guardar_reclamo() -> str | None:
     _captura("paso_30_monto_confirmado.png", "monto confirmado")
 
     # ── 2. Guardar via toolbar — Alt activa menubar, Down baja al disquete, Enter ──
-    print("  → Guardando via toolbar (Alt+Down+Enter)...")
+    _log("  → Guardando via toolbar (Alt+Down+Enter)...")
     _k("{VK_MENU}", pausa=0.60)   # activa toolbar Oracle Forms
     _k("{DOWN}",    pausa=0.60)   # selecciona disquete (primer ítem activo)
     _k("{ENTER}",   pausa=2.00)   # guarda — esperar que Oracle Forms procese
@@ -2014,7 +2103,7 @@ def _guardar_reclamo() -> str | None:
             "Un modal bloqueó el guardado — usuario sin permisos o error de validación"
         )
 
-    print("  → Reclamo guardado")
+    _log("  → Reclamo guardado")
 
     # ── 3. Volver a Generales (1) — offset izquierdo desde tab_generales_2 ────
     tab2_tpl = _T("tab_generales_2.png")
@@ -2026,11 +2115,11 @@ def _guardar_reclamo() -> str | None:
                 cy = int(loc.top  + loc.height / 2)
                 pyautogui.click(cx, cy)
                 time.sleep(0.80)
-                print(f"  → Click Generales (1) ({cx}, {cy})")
+                _log(f"  → Click Generales (1) ({cx}, {cy})")
         except pyautogui.ImageNotFoundException:
-            print("  [WARN] tab_generales_2.png no encontrado — no se pudo ir a G1")
+            _log("  [WARN] tab_generales_2.png no encontrado — no se pudo ir a G1")
         except Exception as exc:
-            print(f"  [WARN] Error navegando a G1: {exc}")
+            _log(f"  [WARN] Error navegando a G1: {exc}")
 
     _captura("paso_30_generales1.png", "Generales (1) post-guardado")
 
@@ -2046,18 +2135,18 @@ def _guardar_reclamo() -> str | None:
             import pytesseract
             texto = pytesseract.image_to_string(img, config="--psm 7 digits").strip()
             numero_reclamo = texto.replace(" ", "-") if texto else None
-            print(f"  → No. de Reclamo (OCR): {numero_reclamo}")
+            _log(f"  → No. de Reclamo (OCR): {numero_reclamo}")
         except Exception:
-            print(f"  [WARN] OCR no disponible — crop en: {crop_path}")
+            _log(f"  [WARN] OCR no disponible — crop en: {crop_path}")
     else:
-        print("  [WARN] No se pudo recortar zona No. de Reclamo — label_no_reclamo.png no encontrado")
+        _log("  [WARN] No se pudo recortar zona No. de Reclamo — label_no_reclamo.png no encontrado")
 
     _captura("paso_30_completo.png", f"reclamo {numero_reclamo or 'OCR-FALLIDO'} generado")
 
     if not numero_reclamo:
-        print(f"  [!] No. de Reclamo no leído por OCR — revisar crop en capturas para número manual")
+        _log(f"  [!] No. de Reclamo no leído por OCR — revisar crop en capturas para número manual")
 
-    print(f"[OK] Reclamo guardado — No. de Reclamo: {numero_reclamo or '(revisar crop)'}")
+    _log(f"[OK] Reclamo guardado — No. de Reclamo: {numero_reclamo or '(revisar crop)'}")
     return numero_reclamo
 
 
@@ -2091,13 +2180,13 @@ def _cerrar_modal_no() -> bool:
         time.sleep(0.50)
     except Exception as exc:
         import pyautogui as _pag_modal
-        print(f"  [WARN] pywinauto no disponible para modal No: {exc} — usando Tab+Enter pyautogui")
+        _log(f"  [WARN] pywinauto no disponible para modal No: {exc} — usando Tab+Enter pyautogui")
         _pag_modal.hotkey("tab")
         time.sleep(0.15)
         _pag_modal.hotkey("enter")
         time.sleep(0.50)
 
-    print("  → Modal cerrado con 'No' (Tab+Enter)")
+    _log("  → Modal cerrado con 'No' (Tab+Enter)")
     return True
 
 
@@ -2133,7 +2222,7 @@ def _retroceder_una_pestana(pestana_fallida: str) -> None:
     """
     import pyautogui
 
-    print(f"  [RETRY] Retrocediendo desde '{pestana_fallida}' para reintentar...")
+    _log(f"  [RETRY] Retrocediendo desde '{pestana_fallida}' para reintentar...")
 
     # ESC para limpiar cualquier campo en edición
     try:
@@ -2161,7 +2250,7 @@ def _retroceder_una_pestana(pestana_fallida: str) -> None:
 
     loc = _loc_g2()
     if loc is None:
-        print("  [WARN] tab_generales_2.png no encontrado — no se puede retroceder")
+        _log("  [WARN] tab_generales_2.png no encontrado — no se puede retroceder")
         return
 
     g2_cx = int(loc.left + loc.width / 2)
@@ -2194,7 +2283,7 @@ def _retroceder_una_pestana(pestana_fallida: str) -> None:
             pass
 
     _captura(f"retry_pestana_{pestana_fallida}.png", f"tras retroceder a '{pestana_fallida}'")
-    print(f"  [RETRY] Listo para reintentar '{pestana_fallida}'")
+    _log(f"  [RETRY] Listo para reintentar '{pestana_fallida}'")
 
 
 def _en_menu_principal() -> bool:
@@ -2226,14 +2315,14 @@ def _cerrar_reclamo_y_volver_inicio() -> None:
     """
     _MAX = 10
 
-    print("\n[→] Cerrando formularios — volviendo a pantalla principal...")
+    _log("\n[→] Cerrando formularios — volviendo a pantalla principal...")
 
     for intento in range(1, _MAX + 1):
         if _en_menu_principal():
-            print(f"  → Menú principal detectado — ya en pantalla inicial (intento {intento})")
+            _log(f"  → Menú principal detectado — ya en pantalla inicial (intento {intento})")
             break
 
-        print(f"  → Cerrando MDI {intento}...")
+        _log(f"  → Cerrando MDI {intento}...")
         _cerrar_formulario_consulta_endosos()
         time.sleep(0.60)
         _captura(f"paso_cierre_{intento:02d}.png", f"cierre MDI {intento}")
@@ -2242,10 +2331,10 @@ def _cerrar_reclamo_y_volver_inicio() -> None:
             time.sleep(0.25)
             _captura(f"paso_cierre_{intento:02d}b_post_si.png", f"post-modal Sí ({intento})")
     else:
-        print(f"  [WARN] Se alcanzó el máximo de {_MAX} cierres sin detectar menú principal")
+        _log(f"  [WARN] Se alcanzó el máximo de {_MAX} cierres sin detectar menú principal")
 
     _captura("paso_cierre_pantalla_principal.png", "pantalla principal Oracle Forms")
-    print("[OK] Vuelto a pantalla principal — listo para siguiente caso")
+    _log("[OK] Vuelto a pantalla principal — listo para siguiente caso")
 
 
 def _crop_zona_no_reclamo(nombre_archivo: str) -> str | None:
@@ -2279,14 +2368,14 @@ def _crop_zona_no_reclamo(nombre_archivo: str) -> str | None:
                     vy2 = vy1 + 30
                     img = pyautogui.screenshot(region=(vx1, vy1, vx2 - vx1, vy2 - vy1))
                     img.save(crop_path)
-                    print(f"  → Crop 'No. de Reclamo' via label (conf={conf}): ({vx1},{vy1})→({vx2},{vy2})")
-                    print(f"     Guardado: {crop_path}")
+                    _log(f"  → Crop 'No. de Reclamo' via label (conf={conf}): ({vx1},{vy1})→({vx2},{vy2})")
+                    _log(f"     Guardado: {crop_path}")
                     return crop_path
             except pyautogui.ImageNotFoundException:
                 pass
             except Exception as exc:
-                print(f"  [WARN] Error buscando label_no_reclamo (conf={conf}): {exc}")
-        print("  [WARN] label_no_reclamo.png no encontrado en pantalla")
+                _log(f"  [WARN] Error buscando label_no_reclamo (conf={conf}): {exc}")
+        _log("  [WARN] label_no_reclamo.png no encontrado en pantalla")
 
     # Estrategia 2: offset fijo desde titlebar
     loc_tb = _localizar_titlebar()
@@ -2299,13 +2388,13 @@ def _crop_zona_no_reclamo(nombre_archivo: str) -> str | None:
         ry2 = 265 + dy
         img = pyautogui.screenshot(region=(rx1, ry1, rx2 - rx1, ry2 - ry1))
         img.save(crop_path)
-        print(f"  → Crop 'No. de Reclamo' via titlebar offset: ({rx1},{ry1})→({rx2},{ry2})")
-        print(f"     Guardado: {crop_path}")
+        _log(f"  → Crop 'No. de Reclamo' via titlebar offset: ({rx1},{ry1})→({rx2},{ry2})")
+        _log(f"     Guardado: {crop_path}")
         if not os.path.isfile(label_tpl):
-            print("     [NOTA] Crea label_no_reclamo.png para mayor precisión")
+            _log("     [NOTA] Crea label_no_reclamo.png para mayor precisión")
         return crop_path
 
-    print("  [WARN] No se pudo calcular zona 'No. de Reclamo' — ni label ni titlebar disponibles")
+    _log("  [WARN] No se pudo calcular zona 'No. de Reclamo' — ni label ni titlebar disponibles")
     return None
 
 
@@ -2322,13 +2411,13 @@ def _localizar_titlebar() -> tuple | None:
         try:
             loc = pyautogui.locateOnScreen(tpl, confidence=conf)
             if loc:
-                print(f"  → Titlebar encontrado (confidence={conf}): ({int(loc.left)}, {int(loc.top)})")
+                _log(f"  → Titlebar encontrado (confidence={conf}): ({int(loc.left)}, {int(loc.top)})")
                 return loc
         except pyautogui.ImageNotFoundException:
             pass
         except Exception:
             pass
-    print("  [WARN] titlebar_oracle_forms.png no encontrado en ningún umbral (0.70–0.50)")
+    _log("  [WARN] titlebar_oracle_forms.png no encontrado en ningún umbral (0.70–0.50)")
     return None
 
 
@@ -2344,7 +2433,7 @@ def _simular_guardar() -> None:
     """
     import pyautogui
 
-    print("\n[→] Simulación guardar — calibrando OCR (sin reclamo real)...")
+    _log("\n[→] Simulación guardar — calibrando OCR (sin reclamo real)...")
 
     try:
         from pywinauto import Desktop
@@ -2352,7 +2441,7 @@ def _simular_guardar() -> None:
         rdp.set_focus()
         time.sleep(0.40)
     except Exception as exc:
-        print(f"  [WARN] Ventana RDP no encontrada: {exc}")
+        _log(f"  [WARN] Ventana RDP no encontrada: {exc}")
         return
 
     def _k(keys, pausa=0.40):
@@ -2361,22 +2450,22 @@ def _simular_guardar() -> None:
 
     # ── 1. Enter confirma monto → Alt activa toolbar → Down selecciona disquete
     #       → ESC cancela sin guardar
-    print("  → Enter (confirma monto)...")
+    _log("  → Enter (confirma monto)...")
     _k("{ENTER}", pausa=0.80)
     _captura("paso_sim_01a_monto_confirmado.png", "monto confirmado")
 
-    print("  → Alt (activa toolbar Oracle Forms)...")
+    _log("  → Alt (activa toolbar Oracle Forms)...")
     _k("{VK_MENU}", pausa=0.60)
     _captura("paso_sim_01b_toolbar_activa.png", "toolbar activada")
 
-    print("  → Down (selecciona disquete)...")
+    _log("  → Down (selecciona disquete)...")
     _k("{DOWN}", pausa=0.60)
     _captura("paso_sim_01c_disquete_seleccionado.png", "disquete seleccionado")
 
-    print("  → ESC (cancela sin guardar)...")
+    _log("  → ESC (cancela sin guardar)...")
     _k("{ESC}", pausa=0.60)
     _captura("paso_sim_01d_cancelado.png", "ESC — guardado cancelado sin reclamo")
-    print("  → Secuencia Alt+Down+ESC completada — toolbar cerrada sin guardar")
+    _log("  → Secuencia Alt+Down+ESC completada — toolbar cerrada sin guardar")
 
     # ── 2. Re-focusear Oracle Forms y navegar a Generales (1) ────────────────
     # Tras ESC del toolbar, la ventana puede perder foco.
@@ -2392,7 +2481,7 @@ def _simular_guardar() -> None:
         fy = int(loc_tb_focus.top  + loc_tb_focus.height + 80)  # 80px bajo el titlebar
         pyautogui.click(fx, fy)
         time.sleep(0.60)
-        print(f"  → Re-foco Oracle Forms ({fx}, {fy})")
+        _log(f"  → Re-foco Oracle Forms ({fx}, {fy})")
         _captura("paso_sim_02a_refoco.png", "Oracle Forms re-focuseado")
 
     # Buscar tab G2 con umbrales descendentes; exigir x > 100 para descartar falsos
@@ -2405,15 +2494,15 @@ def _simular_guardar() -> None:
                 cy = int(loc.top  + loc.height / 2)
                 pyautogui.click(cx, cy)
                 time.sleep(0.80)
-                print(f"  → Click Generales (1) via offset G2 (conf={conf}) ({cx}, {cy})")
+                _log(f"  → Click Generales (1) via offset G2 (conf={conf}) ({cx}, {cy})")
                 g1_ok = True
                 break
             elif loc:
-                print(f"  [SKIP] G2 encontrado en x={int(loc.left)} (< 100) con conf={conf} — posible falso positivo")
+                _log(f"  [SKIP] G2 encontrado en x={int(loc.left)} (< 100) con conf={conf} — posible falso positivo")
         except pyautogui.ImageNotFoundException:
             pass
         except Exception as exc:
-            print(f"  [WARN] Error buscando G2 (conf={conf}): {exc}")
+            _log(f"  [WARN] Error buscando G2 (conf={conf}): {exc}")
 
     if not g1_ok:
         # Fallback: tab_reservas como ancla — G1 está ~4 anchos de pestaña a la izq.
@@ -2426,16 +2515,16 @@ def _simular_guardar() -> None:
                     if cx > 50:
                         pyautogui.click(cx, cy)
                         time.sleep(0.80)
-                        print(f"  → Click Generales (1) via offset Reservas (conf={conf}) ({cx}, {cy})")
+                        _log(f"  → Click Generales (1) via offset Reservas (conf={conf}) ({cx}, {cy})")
                         g1_ok = True
                         break
             except pyautogui.ImageNotFoundException:
                 pass
             except Exception as exc:
-                print(f"  [WARN] Error buscando Reservas (conf={conf}): {exc}")
+                _log(f"  [WARN] Error buscando Reservas (conf={conf}): {exc}")
 
     if not g1_ok:
-        print("  [WARN] No se pudo navegar a G1 — captura del estado actual")
+        _log("  [WARN] No se pudo navegar a G1 — captura del estado actual")
 
     _captura("paso_sim_02_generales1.png", "estado tras navegar a G1")
 
@@ -2445,16 +2534,16 @@ def _simular_guardar() -> None:
     # ── 4. Crop zona "No. de Reclamo" usando label como ancla ────────────────
     _crop_zona_no_reclamo("paso_sim_04_zona_ocr_reclamo.png")
 
-    print("[OK] Simulación completada — sin reclamo creado")
-    print(f"     Revisar capturas en: {_CAPTURAS_DIR}")
-    print("      · paso_sim_03_contexto_g1_completo.png — pantalla completa G1")
-    print("      · paso_sim_04_zona_ocr_reclamo.png     — crop campo No. de Reclamo")
+    _log("[OK] Simulación completada — sin reclamo creado")
+    _log(f"     Revisar capturas en: {_CAPTURAS_DIR}")
+    _log("      · paso_sim_03_contexto_g1_completo.png — pantalla completa G1")
+    _log("      · paso_sim_04_zona_ocr_reclamo.png     — crop campo No. de Reclamo")
     if not os.path.isfile(_T("label_no_reclamo.png")):
-        print()
-        print("  [PRÓXIMO PASO] Crear template del label:")
-        print("    1. Abre paso_sim_03_contexto_g1_completo.png")
-        print("    2. Recorta solo el texto 'No. de Reclamo' (sin el campo)")
-        print(f"    3. Guarda como: {_T('label_no_reclamo.png')}")
+        _log()
+        _log("  [PRÓXIMO PASO] Crear template del label:")
+        _log("    1. Abre paso_sim_03_contexto_g1_completo.png")
+        _log("    2. Recorta solo el texto 'No. de Reclamo' (sin el campo)")
+        _log(f"    3. Guarda como: {_T('label_no_reclamo.png')}")
 
 
 # ------------------------------------------------------------------
@@ -2581,7 +2670,20 @@ def main():
     parser.add_argument("--datos-json", metavar="ARCHIVO",
                         help="Ruta al JSON de DatosReclamo (salida de Phase A / procesar_casos.py). "
                              "Precarga póliza, fecha y todos los campos del formulario.")
+    parser.add_argument("--case-number", default="",
+                        help="Número de caso (ej. 02213748) — prefija el log para trazabilidad nocturna")
     args = parser.parse_args()
+
+    # ── Inicializar Notificador con timestamps ────────────────────────────────
+    global _notif
+    from src.shared.notificador import Notificador
+    _log_path = Path(_SCRIPT_DIR) / "resultados" / (
+        f"run_b_{args.case_number}_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        if args.case_number else
+        f"run_b_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    )
+    _notif = Notificador.desde_env(log_path=_log_path)
+    _validar_templates()
 
     # ── Cargar DatosReclamo desde JSON (Phase A → Phase B bridge) ────────────
     datos: dict = {}
@@ -2593,10 +2695,10 @@ def main():
             _raw = json.load(_f)
         # Soporta tanto el dict plano como el envelope {"reclamo_data": {...}}
         datos = _raw.get("reclamo_data", _raw)
-        print(f"[→] Datos cargados desde {args.datos_json}")
-        print(f"    Póliza:    {datos.get('numero_poliza', '—')}")
-        print(f"    Tipo:      {(datos.get('siniestro') or {}).get('tipo', '—')}")
-        print(f"    Conductor: {(datos.get('conductor') or {}).get('nombre', '—')} "
+        _log(f"[→] Datos cargados desde {args.datos_json}")
+        _log(f"    Póliza:    {datos.get('numero_poliza', '—')}")
+        _log(f"    Tipo:      {(datos.get('siniestro') or {}).get('tipo', '—')}")
+        _log(f"    Conductor: {(datos.get('conductor') or {}).get('nombre', '—')} "
               f"{(datos.get('conductor') or {}).get('apellido', '—')}")
 
     # Auto-poblar poliza y fecha desde datos si no fueron pasados como arg
@@ -2621,11 +2723,11 @@ def main():
                 win.maximize()
                 win.activate()
                 time.sleep(0.8)
-                print(f"[→] Ventana RDP al frente: '{rdp_wins[0]}'")
+                _log(f"[→] Ventana RDP al frente: '{rdp_wins[0]}'")
             else:
-                print("[WARN] Ventana RDP no encontrada — asegurate de que la sesion este activa")
+                _log("[WARN] Ventana RDP no encontrada — asegurate de que la sesion este activa")
         except Exception as e:
-            print(f"[WARN] No se pudo traer ventana RDP al frente: {e}")
+            _log(f"[WARN] No se pudo traer ventana RDP al frente: {e}")
 
     # pasos que saltan segmentos anteriores
     skip_login      = args.step in ("rdp", "premium", "apertura", "generales1", "generales2", "generales3", "reservas", "formulario")
@@ -2637,15 +2739,15 @@ def main():
 
     if not args.no_rdp:
         if not args.host:
-            print("[ERROR] Host requerido: --host o RDP_HOST en .env")
+            _log("[ERROR] Host requerido: --host o RDP_HOST en .env")
             sys.exit(1)
         if not args.username or not args.password:
-            print("[ERROR] Credenciales RDP requeridas en .env o como args")
+            _log("[ERROR] Credenciales RDP requeridas en .env o como args")
             sys.exit(1)
 
     if not skip_login and not args.dry_run:
         if not args.premium_username or not args.premium_password:
-            print("[ERROR] Credenciales Premium requeridas: PREMIUM_USERNAME y PREMIUM_PASSWORD en .env")
+            _log("[ERROR] Credenciales Premium requeridas: PREMIUM_USERNAME y PREMIUM_PASSWORD en .env")
             sys.exit(1)
 
     # Limpiar capturas anteriores
@@ -2653,17 +2755,17 @@ def main():
     if os.path.isdir(_CAPTURAS_DIR):
         shutil.rmtree(_CAPTURAS_DIR)
     os.makedirs(_CAPTURAS_DIR)
-    print(f"[→] Capturas en: {_CAPTURAS_DIR}")
+    _log(f"[→] Capturas en: {_CAPTURAS_DIR}")
 
-    print(f"\n{'='*55}")
-    print(f"  PHASE B — Abrir Sistema Premium + Login Oracle Forms")
+    _log(f"\n{'='*55}")
+    _log(f"  PHASE B — Abrir Sistema Premium + Login Oracle Forms")
     if not args.no_rdp:
-        print(f"  RDP:     {args.host}  |  {args.username}")
+        _log(f"  RDP:     {args.host}  |  {args.username}")
     if not skip_login and not args.dry_run:
-        print(f"  Premium: {args.premium_username}")
+        _log(f"  Premium: {args.premium_username}")
     if args.step != "all":
-        print(f"  Modo:    --step {args.step}")
-    print(f"{'='*55}\n")
+        _log(f"  Modo:    --step {args.step}")
+    _log(f"{'='*55}\n")
 
     try:
         _captura("paso_01_inicio.png", "pantalla inicial")
@@ -2678,7 +2780,7 @@ def main():
             if not _esperar_escritorio(
                 args.host, args.username, args.password, timeout_s=args.timeout
             ):
-                print("[ERROR] No se pudo establecer la sesión RDP")
+                _log("[ERROR] No se pudo establecer la sesión RDP")
                 _captura("error_rdp_fallido.png")
                 sys.exit(1)
 
@@ -2688,18 +2790,18 @@ def main():
             _enfocar_ventana_rdp(args.host)
 
         if args.step == "rdp":
-            print(f"\n[✓] --step rdp completado. Capturas en: {_CAPTURAS_DIR}")
+            _log(f"\n[✓] --step rdp completado. Capturas en: {_CAPTURAS_DIR}")
             return
 
         # ── Segmento Premium (abrir app) ──────────────────────────────
         if not args.no_premium:
             if not _abrir_servidor_premium(dry_run=args.dry_run):
                 _captura("error_premium_no_encontrado.png")
-                print(f"\n[HINT] Revisá las capturas en: {_CAPTURAS_DIR}")
+                _log(f"\n[HINT] Revisá las capturas en: {_CAPTURAS_DIR}")
                 sys.exit(1)
 
             if args.dry_run:
-                print(f"\n[✓] Dry-run completado. Capturas en: {_CAPTURAS_DIR}")
+                _log(f"\n[✓] Dry-run completado. Capturas en: {_CAPTURAS_DIR}")
                 return
 
             time.sleep(3)
@@ -2708,20 +2810,20 @@ def main():
             _captura("paso_10_premium_abierto.png", "app Premium abierta")
 
         if args.step == "premium":
-            print(f"\n[✓] --step premium completado. Capturas en: {_CAPTURAS_DIR}")
+            _log(f"\n[✓] --step premium completado. Capturas en: {_CAPTURAS_DIR}")
             return
 
         # ── Segmento Login Oracle Forms ───────────────────────────────
         if not skip_login:
             if not _esperar_dialogo_conexion(timeout_s=30):
-                print("[WARN] Continuando de todas formas — el diálogo puede estar visible")
+                _log("[WARN] Continuando de todas formas — el diálogo puede estar visible")
 
             _completar_login_premium(args.premium_username, args.premium_password)
 
             _esperar_premium_logueado(timeout_s=45)
 
             if args.step == "login":
-                print(f"\n[✓] --step login completado. Capturas en: {_CAPTURAS_DIR}")
+                _log(f"\n[✓] --step login completado. Capturas en: {_CAPTURAS_DIR}")
                 return
 
         # ── Segmento Apertura de Reclamo (P1 + P2) ───────────────────
@@ -2729,17 +2831,17 @@ def main():
             poliza = args.poliza
             fecha  = args.fecha_siniestro
             if not poliza or not fecha:
-                print("[WARN] --poliza y --fecha-siniestro requeridos para el paso apertura")
-                print(f"       Capturas hasta login en: {_CAPTURAS_DIR}")
+                _log("[WARN] --poliza y --fecha-siniestro requeridos para el paso apertura")
+                _log(f"       Capturas hasta login en: {_CAPTURAS_DIR}")
                 return
 
             if not _navegar_apertura_reclamo():
                 _captura("error_navegacion_menu.png")
-                print(f"\n[HINT] Creá los templates en docs/screens/ para navegación precisa")
+                _log(f"\n[HINT] Creá los templates en docs/screens/ para navegación precisa")
                 sys.exit(1)
 
             if not _esperar_consulta_endosos(timeout_s=15):
-                print("[WARN] Continuando de todas formas...")
+                _log("[WARN] Continuando de todas formas...")
 
             _ingresar_poliza_y_fecha(poliza, fecha)
             _click_boton_consultar_unidades()
@@ -2748,7 +2850,7 @@ def main():
             # carga los datos — esperar un poco más y luego verificar
             time.sleep(1.5)
             if _cerrar_popup_forms_si_existe():
-                print("\n[!] Reclamo duplicado — Oracle Forms advirtió posible duplicidad")
+                _log("\n[!] Reclamo duplicado — Oracle Forms advirtió posible duplicidad")
                 _cerrar_formulario_consulta_endosos()
                 raise ReclamoDuplicadoError(
                     f"Póliza {poliza} ya tiene un reclamo para la fecha {fecha}"
@@ -2758,7 +2860,7 @@ def main():
 
             # El popup de vigencia puede aparecer al cargar la pantalla de automóvil
             if _cerrar_popup_forms_si_existe():
-                print("\n[!] Siniestro fuera de vigencia — detectado al cargar automóvil")
+                _log("\n[!] Siniestro fuera de vigencia — detectado al cargar automóvil")
                 _cerrar_pantalla_automovil_y_endosos()
                 raise SiniestroFueraVigenciaError(
                     f"Póliza {poliza}: siniestro {fecha} fuera de vigencia del automóvil"
@@ -2768,7 +2870,7 @@ def main():
 
             # También puede aparecer al intentar abrir coberturas
             if _cerrar_popup_forms_si_existe():
-                print("\n[!] Siniestro fuera de vigencia — detectado al abrir coberturas")
+                _log("\n[!] Siniestro fuera de vigencia — detectado al abrir coberturas")
                 _cerrar_pantalla_automovil_y_endosos()
                 raise SiniestroFueraVigenciaError(
                     f"Póliza {poliza}: siniestro {fecha} fuera de vigencia del automóvil"
@@ -2790,7 +2892,7 @@ def main():
                     break
                 except ErrorValidacionCampoError as exc:
                     if _intento_fill < 2:
-                        print(f"  [RETRY G1] {exc} — reintentando...")
+                        _log(f"  [RETRY G1] {exc} — reintentando...")
                         _retroceder_una_pestana(exc.pestana)
                     else:
                         raise
@@ -2810,7 +2912,7 @@ def main():
                     break
                 except ErrorValidacionCampoError as exc:
                     if _intento_fill < 2:
-                        print(f"  [RETRY G2] {exc} — reintentando...")
+                        _log(f"  [RETRY G2] {exc} — reintentando...")
                         _retroceder_una_pestana(exc.pestana)
                     else:
                         raise
@@ -2826,7 +2928,7 @@ def main():
                     break
                 except ErrorValidacionCampoError as exc:
                     if _intento_fill < 2:
-                        print(f"  [RETRY G3] {exc} — reintentando...")
+                        _log(f"  [RETRY G3] {exc} — reintentando...")
                         _retroceder_una_pestana(exc.pestana)
                     else:
                         raise
@@ -2842,7 +2944,7 @@ def main():
                     break
                 except ErrorValidacionCampoError as exc:
                     if _intento_fill < 2:
-                        print(f"  [RETRY RES] {exc} — reintentando...")
+                        _log(f"  [RETRY RES] {exc} — reintentando...")
                         _retroceder_una_pestana(exc.pestana)
                     else:
                         raise
@@ -2850,39 +2952,39 @@ def main():
         if args.guardar:
             try:
                 numero = _guardar_reclamo()
-                print(f"\n[✓] RECLAMO CREADO — No.: {numero}")
+                _log(f"\n[✓] RECLAMO CREADO — No.: {numero}")
                 _cerrar_reclamo_y_volver_inicio()
             except NoAutorizadoError as exc:
-                print(f"\n[!] NO AUTORIZADO — {exc}")
+                _log(f"\n[!] NO AUTORIZADO — {exc}")
                 _cerrar_reclamo_y_volver_inicio()
                 sys.exit(5)
             except ReclamoExistenteError as exc:
-                print(f"\n[!] RECLAMO YA EXISTE — {exc}")
+                _log(f"\n[!] RECLAMO YA EXISTE — {exc}")
                 _cerrar_reclamo_y_volver_inicio()
                 sys.exit(2)
         elif args.simular_guardar:
             _simular_guardar()
             _cerrar_reclamo_y_volver_inicio()
         else:
-            print("\n[i] Formulario listo. Usar --guardar para crear el reclamo.")
+            _log("\n[i] Formulario listo. Usar --guardar para crear el reclamo.")
 
-        print(f"\n[✓] Listo. Capturas en: {_CAPTURAS_DIR}")
-        print(f"    Abrí la carpeta: explorer {_CAPTURAS_DIR}")
+        _log(f"\n[✓] Listo. Capturas en: {_CAPTURAS_DIR}")
+        _log(f"    Abrí la carpeta: explorer {_CAPTURAS_DIR}")
 
     except ReclamoDuplicadoError as exc:
-        print(f"\n[!] RECLAMO DUPLICADO — {exc}")
-        print("    Oracle Forms advirtió posible duplicidad — caso saltado.")
+        _log(f"\n[!] RECLAMO DUPLICADO — {exc}")
+        _log("    Oracle Forms advirtió posible duplicidad — caso saltado.")
         _cerrar_reclamo_y_volver_inicio()
         sys.exit(3)
 
     except SiniestroFueraVigenciaError as exc:
-        print(f"\n[!] SINIESTRO FUERA DE VIGENCIA — {exc}")
-        print("    La fecha del siniestro no está cubierta por ningún endoso — requiere revisión manual.")
+        _log(f"\n[!] SINIESTRO FUERA DE VIGENCIA — {exc}")
+        _log("    La fecha del siniestro no está cubierta por ningún endoso — requiere revisión manual.")
         sys.exit(4)
 
     except ErrorValidacionCampoError as exc:
-        print(f"\n[!] VALIDACION FALLIDA tras reintentos — {exc}")
-        print(f"    Pestaña: {exc.pestana} — campo requerido vacío persistente.")
+        _log(f"\n[!] VALIDACION FALLIDA tras reintentos — {exc}")
+        _log(f"    Pestaña: {exc.pestana} — campo requerido vacío persistente.")
         _cerrar_reclamo_y_volver_inicio()
         sys.exit(6)
 

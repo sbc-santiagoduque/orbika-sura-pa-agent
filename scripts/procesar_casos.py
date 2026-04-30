@@ -355,7 +355,8 @@ def _rdp_activo() -> bool:
         return False
 
 
-def _ejecutar_fase_b(datos_json_path: str, guardar: bool = False) -> int:
+def _ejecutar_fase_b(datos_json_path: str, guardar: bool = False,
+                     case_number: str = "") -> int:
     """
     Invoca open_premium.py para un caso.
 
@@ -384,6 +385,8 @@ def _ejecutar_fase_b(datos_json_path: str, guardar: bool = False) -> int:
 
     if guardar:
         cmd.append("--guardar")
+    if case_number:
+        cmd += ["--case-number", case_number]
 
     result = subprocess.run(cmd)
     return result.returncode
@@ -571,7 +574,7 @@ def main():
         estado.marcar_fase_b_iniciado(cn)
         estado.incrementar_intentos(cn, "b")
 
-        rc = _ejecutar_fase_b(str(datos_json), guardar=args.guardar)
+        rc = _ejecutar_fase_b(str(datos_json), guardar=args.guardar, case_number=cn)
 
         if rc == 0:
             estado.marcar_completado(cn)
