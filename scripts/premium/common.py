@@ -88,6 +88,61 @@ def validate_templates() -> None:
 
 
 # ------------------------------------------------------------------
+# RDP input mode
+# ------------------------------------------------------------------
+
+_rdp_slow_mode: bool = False
+
+
+def is_slow_rdp() -> bool:
+    """True when high-latency RDP was detected at session start."""
+    return _rdp_slow_mode
+
+
+def set_slow_rdp(value: bool) -> None:
+    global _rdp_slow_mode
+    _rdp_slow_mode = value
+    if value:
+        log("[WARN] Slow RDP detected — text input via pyautogui.write, special keys via rdp.type_keys")
+
+
+def rdp_focus(rdp) -> None:
+    """
+    Focus the RDP/Oracle Forms window before sending keystrokes.
+    Normal mode: pywinauto set_focus() (~10s UIA overhead in slow RDP).
+    Slow mode: no-op — Oracle Forms is already focused from click-based navigation.
+    """
+    if not _rdp_slow_mode:
+        rdp.set_focus()
+        time.sleep(0.40)
+    # In slow mode the form is already focused; avoid another UIA round-trip.
+
+
+def rdp_type(rdp, keys: str, pause: float = 0.05) -> None:
+    """
+    Send keystrokes to the RDP window.
+
+    Normal mode: rdp.type_keys() for everything (pywinauto UIA).
+    Slow mode: pyautogui.write() for plain-text segments (avoids ~11s UIA
+    stabilisation wait per call), rdp.type_keys() only for special keys
+    like {TAB}, {ENTER}, {F8}, {VK_MENU}, {DOWN}, etc.
+    """
+    import re
+    if not _rdp_slow_mode:
+        rdp.type_keys(keys, pause=pause, with_spaces=True)
+        return
+
+    import pyautogui
+    for part in re.split(r'(\{[^}]+\})', keys):
+        if not part:
+            continue
+        if part.startswith('{') and part.endswith('}'):
+            rdp.type_keys(part, pause=pause, with_spaces=True)
+        else:
+            pyautogui.write(part, interval=0.05)
+
+
+# ------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------
 

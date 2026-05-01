@@ -2,7 +2,7 @@
 import os
 import time
 
-from premium.common import T, log, screenshot, CAPTURES_DIR, TITLEBAR_REF
+from premium.common import T, log, screenshot, CAPTURES_DIR, TITLEBAR_REF, rdp_focus
 from premium.exceptions import FieldValidationError, UnauthorizedError
 
 _OFFSET_INPUT = 200
@@ -63,8 +63,9 @@ def _click_x_apertura() -> bool:
 
 
 def _type_keys(rdp, keys, n=1, pause=0.25) -> None:
+    from premium.common import rdp_type
     for _ in range(n):
-        rdp.type_keys(keys, pause=0.05, with_spaces=True)
+        rdp_type(rdp, keys, pause=0.05)
         time.sleep(pause)
 
 
@@ -214,8 +215,7 @@ def fill_generals_1(incident_type_code: str = "30",
 
     try:
         rdp = _get_rdp()
-        rdp.set_focus()
-        time.sleep(0.30)
+        rdp_focus(rdp)
     except Exception as exc:
         log(f"  [WARN] RDP window not found: {exc}")
         return False
@@ -278,8 +278,7 @@ def fill_generals_2(cedula: str = "8-123-456",
 
     try:
         rdp = _get_rdp()
-        rdp.set_focus()
-        time.sleep(0.30)
+        rdp_focus(rdp)
     except Exception as exc:
         log(f"  [WARN] RDP window not found: {exc}")
         return False
@@ -414,8 +413,7 @@ def fill_generals_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
 
     try:
         rdp = _get_rdp()
-        rdp.set_focus()
-        time.sleep(0.30)
+        rdp_focus(rdp)
     except Exception as exc:
         log(f"  [WARN] RDP window not found: {exc}")
         return False
@@ -477,8 +475,7 @@ def fill_reserves(coverage_code: str = "E",
 
     try:
         rdp = _get_rdp()
-        rdp.set_focus()
-        time.sleep(0.30)
+        rdp_focus(rdp)
     except Exception as exc:
         log(f"  [WARN] RDP window not found: {exc}")
         return False
@@ -569,8 +566,7 @@ def save_claim() -> str | None:
 
     try:
         rdp = _get_rdp()
-        rdp.set_focus()
-        time.sleep(0.40)
+        rdp_focus(rdp)
     except Exception as exc:
         log(f"  [WARN] RDP window not found: {exc}")
         return None
@@ -665,14 +661,14 @@ def simulate_save() -> None:
 
     try:
         rdp = _get_rdp()
-        rdp.set_focus()
-        time.sleep(0.40)
+        rdp_focus(rdp)
     except Exception as exc:
         log(f"  [WARN] RDP window not found: {exc}")
         return
 
     def _k(keys, pause=0.40):
-        rdp.type_keys(keys, pause=0.05, with_spaces=True)
+        from premium.common import rdp_type
+        rdp_type(rdp, keys, pause=0.05)
         time.sleep(pause)
 
     log("  → Enter (confirm amount)...")

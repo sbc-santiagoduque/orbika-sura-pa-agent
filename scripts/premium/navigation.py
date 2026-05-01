@@ -15,14 +15,15 @@ _MENU_CLICKS_REF = {
     "1.2.1.2-Apertura":       (1100, 238),
 }
 
-# Highlighted-state templates for each menu item (primary matching strategy).
+# Templates for click-based navigation (captured live from open menu, prefix nav_).
+# Separate from menu_* templates used elsewhere (recovery.py uses menu_1_reclamos.png).
 _MENU_TEMPLATES = {
-    "Premium":                "menu_premium.png",
-    "1-Reclamos":             "menu_1_reclamos.png",
-    "1.2-Procesos":           "menu_12_procesos.png",
-    "1.2.1-Manejo Reclamos":  "menu_121_manejo.png",
-    "1.2.1.1-Apertura":       "menu_1211_apertura.png",
-    "1.2.1.2-Apertura":       "menu_1211_apertura.png",
+    "Premium":                "nav_premium.png",
+    "1-Reclamos":             "nav_1_reclamos.png",
+    "1.2-Procesos":           "nav_12_procesos.png",
+    "1.2.1-Manejo Reclamos":  "nav_121_manejo.png",
+    "1.2.1.1-Apertura":       "nav_1211_apertura.png",
+    "1.2.1.2-Apertura":       "nav_1211_apertura.png",
 }
 
 # Tabs from last policy field to Fecha del Siniestro in the Endosos form.
@@ -108,12 +109,15 @@ def navigate_to_claim_apertura() -> bool:
     latencia = time.time() - t0
     log(f"  → RTT keystroke: {latencia:.2f}s")
     if latencia > 2.0:
-        log(f"  [WARN] Latencia alta ({latencia:.1f}s/tecla) — cambiando a navegación por click")
+        log(f"  [WARN] Latencia alta ({latencia:.1f}s/tecla) — activando slow mode + navegación por click")
+        from premium.common import set_slow_rdp
+        set_slow_rdp(True)
         return _navigate_by_click()
 
     def _k(keys, n=1, pause=0.35):
+        from premium.common import rdp_type
         for _ in range(n):
-            rdp.type_keys(keys, pause=0.05, with_spaces=True)
+            rdp_type(rdp, keys, pause=0.05)
             time.sleep(pause)
             log(f"    {keys}")
 
@@ -171,15 +175,33 @@ def navigate_to_claim_apertura() -> bool:
 
 def _navigate_by_click() -> bool:
     """
-    Click-based menu navigation fallback using hover + template matching.
-    Hover activates the highlight; locateOnScreen finds the exact position.
+    Click-based menu navigation using template matching as primary strategy.
+    Hover to approximate coordinate first (triggers submenu/highlight), then
+    scan for template with retry. Falls back to coordinates only if no template.
     """
     import pyautogui
 
     log("\n[→] Step 17 (click) — Navigating Premium → Apertura...")
-    screenshot("paso_17_inicio_navegacion.png", "before opening menu")
+    screenshot("paso_17_inicio_navegacion_click.png", "before opening menu (click)")
 
     dx, dy = calculate_window_offset()
+    pm_ref_x, pm_ref_y = _MENU_CLICKS_REF["Premium"]
+
+    # Calibrate offset via Premium template (more reliable than titlebar on some screens).
+    # If found, overrides whatever calculate_window_offset returned.
+    pm_tpl = T(_MENU_TEMPLATES.get("Premium", ""))
+    if os.path.isfile(pm_tpl):
+        try:
+            loc = pyautogui.locateOnScreen(pm_tpl, confidence=0.75)
+            if loc:
+                found_x = int(loc.left + loc.width  / 2)
+                found_y = int(loc.top  + loc.height / 2)
+                dx, dy = found_x - pm_ref_x, found_y - pm_ref_y
+                log(f"  → Offset calibrated via 'Premium' template: ({dx:+d}, {dy:+d})")
+        except pyautogui.ImageNotFoundException:
+            pass
+        except Exception as exc:
+            log(f"  → Premium template error: {exc}")
 
     tb_x = TITLEBAR_REF[0] + dx + 100
     tb_y = TITLEBAR_REF[1] + dy + 16
@@ -187,43 +209,62 @@ def _navigate_by_click() -> bool:
     time.sleep(0.3)
     log(f"  → Focus Oracle Forms ({tb_x}, {tb_y})")
 
-    pm_x = _MENU_CLICKS_REF["Premium"][0] + dx
-    pm_y = _MENU_CLICKS_REF["Premium"][1] + dy
+    pm_x = pm_ref_x + dx
+    pm_y = pm_ref_y + dy
     log(f"  → Click 'Premium' ({pm_x}, {pm_y})")
     pyautogui.click(pm_x, pm_y)
     time.sleep(1.20)
 
-    def _menu_click(key, label, delay=0.80):
+    _STEPS = [
+        ("1-Reclamos",            "1-Reclamos",            1.00),
+        ("1.2-Procesos",          "1.2-Procesos",          1.00),
+        ("1.2.1-Manejo Reclamos", "1.2.1-Manejo Reclamos", 1.00),
+        ("1.2.1.1-Apertura",      "1.2.1.1-Apertura",      1.00),
+        ("1.2.1.2-Apertura",      "1.2.1.1-Apertura",      1.50),
+    ]
+
+    for key, label, delay in _STEPS:
         approx_x = _MENU_CLICKS_REF[key][0] + dx
         approx_y = _MENU_CLICKS_REF[key][1] + dy
-        pyautogui.moveTo(approx_x, approx_y)
-        time.sleep(0.35)
         click_x, click_y = approx_x, approx_y
+
         tpl_file = T(_MENU_TEMPLATES.get(key, ""))
         if os.path.isfile(tpl_file):
-            try:
-                loc = pyautogui.locateOnScreen(tpl_file, confidence=0.90)
-                if loc:
-                    click_x = int(loc.left + loc.width  / 2)
-                    click_y = int(loc.top  + loc.height / 2)
-                    log(f"  → template '{label}' found at ({click_x}, {click_y})")
-                else:
-                    log(f"  → template '{label}' not found — using coord ({approx_x}, {approx_y})")
-            except pyautogui.ImageNotFoundException:
-                log(f"  → template '{label}' not found — using coord ({approx_x}, {approx_y})")
-            except Exception as exc:
-                log(f"  → template '{label}' error ({exc}) — using coord ({approx_x}, {approx_y})")
+            # Hover to approximate position to trigger submenu/highlight
+            pyautogui.moveTo(approx_x, approx_y, duration=0.25)
+            time.sleep(0.70)
+
+            found = False
+            for attempt in range(3):
+                try:
+                    loc = pyautogui.locateOnScreen(tpl_file, confidence=0.85)
+                    if loc:
+                        click_x = int(loc.left + loc.width  / 2)
+                        click_y = int(loc.top  + loc.height / 2)
+                        log(f"  → '{label}' found at ({click_x}, {click_y})")
+                        found = True
+                        break
+                except pyautogui.ImageNotFoundException:
+                    pass
+                except Exception as exc:
+                    log(f"  → template error: {exc}")
+                    break
+                time.sleep(0.40)
+
+            if not found:
+                log(f"  [WARN] '{label}' template not found — using coord ({approx_x}, {approx_y})")
+                screenshot(f"click_nav_miss_{key.replace(' ', '_').replace('.', '')}.png",
+                           f"template miss: {label}")
+        else:
+            log(f"  [WARN] no template for '{label}' — using coord ({approx_x}, {approx_y})")
+            pyautogui.moveTo(approx_x, approx_y, duration=0.25)
+            time.sleep(0.50)
+
         pyautogui.click(click_x, click_y)
         time.sleep(delay)
 
-    _menu_click("1-Reclamos",            "1-Reclamos")
-    _menu_click("1.2-Procesos",          "1.2-Procesos")
-    _menu_click("1.2.1-Manejo Reclamos", "1.2.1-Manejo Reclamos")
-    _menu_click("1.2.1.1-Apertura",      "1.2.1.1-Apertura")
-    _menu_click("1.2.1.2-Apertura",      "1.2.1.1-Apertura", delay=1.20)
-
-    screenshot("paso_18_apertura_seleccionada.png", "post-navigation")
-    log("[OK] Click navigation complete — 1.2.1.1-Apertura selected")
+    screenshot("paso_18_apertura_seleccionada.png", "post-navigation click")
+    log("[OK] Click navigation complete")
     return True
 
 
@@ -287,15 +328,28 @@ def enter_policy_and_date(numero_poliza: str, fecha_siniestro: str) -> bool:
 
     try:
         from premium.rdp import get_rdp_window
+        from premium.common import is_slow_rdp, rdp_focus
         rdp = get_rdp_window()
-        rdp.set_focus()
-        time.sleep(0.40)
+        rdp_focus(rdp)
     except Exception as exc:
         log(f"  [WARN] RDP window not found: {exc}")
         return False
 
+    if is_slow_rdp():
+        # Batch full sequence into ONE rdp.type_keys call.
+        # Overhead is per-call (~11s), so 1 call ≈ 1 call × N calls.
+        tabs = "{TAB}" * _TABS_TO_DATE
+        batch = "".join(f"{p}{{TAB}}" for p in partes) + tabs + fecha_of + "{F8}"
+        log(f"  → [slow] Batch: {batch}")
+        rdp.type_keys(batch, pause=0.05, with_spaces=True)
+        time.sleep(1.50)
+        screenshot("paso_21_f8_ejecutado.png", "F8 executed (batch) — waiting for results")
+        log("[OK] Policy+date+F8 sent in 1 call (slow mode)")
+        return True
+
     def _k(keys, pause=0.20):
-        rdp.type_keys(keys, pause=0.05, with_spaces=True)
+        from premium.common import rdp_type
+        rdp_type(rdp, keys, pause=0.05)
         time.sleep(pause)
         log(f"    {keys}")
 
@@ -425,16 +479,17 @@ def select_collision_coverage() -> bool:
 
     try:
         from premium.rdp import get_rdp_window
+        from premium.common import rdp_focus
         rdp = get_rdp_window()
-        rdp.set_focus()
-        time.sleep(0.30)
+        rdp_focus(rdp)
     except Exception as exc:
         log(f"  [WARN] RDP window not found: {exc}")
         return False
 
     def _k(keys, n=1, pause=0.25):
+        from premium.common import rdp_type
         for _ in range(n):
-            rdp.type_keys(keys, pause=0.05, with_spaces=True)
+            rdp_type(rdp, keys, pause=0.05)
             time.sleep(pause)
             log(f"    {keys}")
 
