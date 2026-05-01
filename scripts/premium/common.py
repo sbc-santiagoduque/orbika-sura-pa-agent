@@ -133,13 +133,19 @@ def rdp_type(rdp, keys: str, pause: float = 0.05) -> None:
         return
 
     import pyautogui
+    pending_specials = ""
     for part in re.split(r'(\{[^}]+\})', keys):
         if not part:
             continue
         if part.startswith('{') and part.endswith('}'):
-            rdp.type_keys(part, pause=pause, with_spaces=True)
+            pending_specials += part
         else:
+            if pending_specials:
+                rdp.type_keys(pending_specials, pause=pause, with_spaces=True)
+                pending_specials = ""
             pyautogui.write(part, interval=0.05)
+    if pending_specials:
+        rdp.type_keys(pending_specials, pause=pause, with_spaces=True)
 
 
 # ------------------------------------------------------------------

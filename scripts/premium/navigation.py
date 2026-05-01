@@ -494,7 +494,7 @@ def select_collision_coverage() -> bool:
             log(f"    {keys}")
 
     log(f"  → Down x{_DOWNS_TO_COLLISION} — reach 'E - POR COLISIÓN O VUELCO'")
-    _k("{DOWN}", _DOWNS_TO_COLLISION)
+    _k("{DOWN}" * _DOWNS_TO_COLLISION)
     time.sleep(0.30)
     screenshot("paso_25_fila_colision_seleccionada.png", "Colisión o Vuelco row active")
 

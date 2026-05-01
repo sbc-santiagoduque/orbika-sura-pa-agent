@@ -237,9 +237,7 @@ def fill_generals_1(incident_type_code: str = "30",
         log(f"  → Incident type '{incident_type_code}' accepted")
 
     _k(description, pause=0.20)
-    _k("{TAB}", pause=0.30)
-    _k("{TAB}", pause=0.30)
-    _k("{ENTER}", pause=0.60)
+    _k("{TAB}{TAB}{ENTER}", pause=0.60)
     log(f"  → Description entered: '{description}'")
     screenshot("paso_26_descripcion_siniestro.png", "description entered")
 
@@ -346,46 +344,45 @@ def fill_generals_2(cedula: str = "8-123-456",
         log("  → Cédula modal detected — Enter to close")
     screenshot("paso_27_cedula.png", "cédula entered")
 
-    _k(nombre, pause=0.20)
-    _k("{ENTER}", pause=0.30)
-    log(f"  → Nombre: {nombre}")
-
-    _k(apellido, pause=0.20)
-    _k("{ENTER}", pause=0.30)
-    log(f"  → Apellido: {apellido}")
+    from premium.common import is_slow_rdp
+    if is_slow_rdp():
+        rdp.type_keys(f"{nombre}{{ENTER}}{apellido}{{ENTER}}", pause=0.05, with_spaces=True)
+        time.sleep(0.30)
+        log(f"  → [slow] Nombre+Apellido batch")
+    else:
+        _k(nombre, pause=0.20)
+        _k("{ENTER}", pause=0.30)
+        _k(apellido, pause=0.20)
+        _k("{ENTER}", pause=0.30)
+    log(f"  → Nombre: {nombre}, Apellido: {apellido}")
 
     if sexo.upper() == "F":
-        _k("{RIGHT}", pause=0.30)
-        _k("{UP}",    pause=0.20)
-        _k("{ENTER}", pause=0.20)
-        _k("{ENTER}", pause=0.30)
+        _k("{RIGHT}{UP}{ENTER}{ENTER}", pause=0.30)
         log("  → Sexo: FEMENINO")
     elif sexo.upper() == "M":
-        _k("{RIGHT}", pause=0.30)
-        _k("{UP}",    pause=0.20)
-        _k("{UP}",    pause=0.20)
-        _k("{ENTER}", pause=0.20)
-        _k("{ENTER}", pause=0.30)
+        _k("{RIGHT}{UP}{UP}{ENTER}{ENTER}", pause=0.30)
         log("  → Sexo: MASCULINO")
     else:
         _k("{ENTER}", pause=0.30)
         log("  → Sexo: blank")
 
-    _k(str(edad), pause=0.20)
-    _k("{ENTER}", pause=0.30)
-    log(f"  → Edad: {edad}")
-
-    _k(tel_residencial, pause=0.20)
-    _k("{ENTER}", pause=0.30)
-    log(f"  → Tel. Residencial: {tel_residencial}")
-
-    _k(tel_oficina, pause=0.20)
-    _k("{ENTER}", pause=0.30)
-    log(f"  → Tel. Oficina: {tel_oficina}")
-
-    _k(relacion, pause=0.20)
-    _k("{ENTER}", pause=0.40)
-    log(f"  → Relación: {relacion}")
+    if is_slow_rdp():
+        rdp.type_keys(
+            f"{edad}{{ENTER}}{tel_residencial}{{ENTER}}{tel_oficina}{{ENTER}}{relacion}{{ENTER}}",
+            pause=0.05, with_spaces=True,
+        )
+        time.sleep(0.40)
+        log(f"  → [slow] Edad+Tels+Relacion batch: {edad}/{tel_residencial}/{tel_oficina}/{relacion}")
+    else:
+        _k(str(edad), pause=0.20)
+        _k("{ENTER}", pause=0.30)
+        _k(tel_residencial, pause=0.20)
+        _k("{ENTER}", pause=0.30)
+        _k(tel_oficina, pause=0.20)
+        _k("{ENTER}", pause=0.30)
+        _k(relacion, pause=0.20)
+        _k("{ENTER}", pause=0.40)
+        log(f"  → Edad: {edad} / Tel.Res: {tel_residencial} / Tel.Of: {tel_oficina} / Relación: {relacion}")
 
     if responsabilidad == "Culpable":
         _k("{LEFT}", pause=0.30)
@@ -441,9 +438,7 @@ def fill_generals_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
     if _click_label("campo_descripcion_danos.png", label="Descripción de daños"):
         time.sleep(0.30)
         _k(descripcion_danos, pause=0.20)
-        _k("{TAB}", pause=0.20)
-        _k("{TAB}", pause=0.20)
-        _k("{ENTER}", pause=0.60)
+        _k("{TAB}{TAB}{ENTER}", pause=0.60)
         screenshot("paso_28_descripcion_danos.png", "damage description entered")
         log(f"  → Damage description: '{descripcion_danos}'")
 
