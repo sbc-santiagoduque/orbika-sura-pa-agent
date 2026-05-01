@@ -427,6 +427,7 @@ def main():
         else:
             if _formulario_filled:
                 log("\n[i] Formulario listo. Usar --guardar para crear el reclamo.")
+                close_claim_and_return_home()
 
         log(f"\n[✓] Listo. Capturas en: {CAPTURES_DIR}")
         log(f"    Abrí la carpeta: explorer {CAPTURES_DIR}")
