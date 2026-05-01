@@ -507,10 +507,15 @@ def main():
     ci_base    = _construir_ci_client(args.ci_url)
     ci_cliente = _CIWatchdog(ci_base, max_fallos=3, notif=notif)
 
+    from src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper import (
+        PolizaCanceladaError,
+    )
+
     # -- Retry wrappers ---------------------------------------------------
     @con_reintento(
         max_intentos=3,
         backoff=(10, 60, 180),
+        no_reintentar=(PolizaCanceladaError,),
         on_reintento=lambda n, exc: notif.info(f"  Phase A reintento {n}: {exc}"),
     )
     def fase_a_con_retry(caso):
@@ -556,6 +561,11 @@ def main():
                     f"Tipo: {(datos.get('siniestro') or {}).get('tipo', '?')} | "
                     f"Reserva: {(datos.get('poliza') or {}).get('reserva', '?')}"
                 )
+            except PolizaCanceladaError as exc:
+                estado.marcar_poliza_cancelada(cn, str(exc))
+                notif.alerta(f"  [A] Póliza cancelada — {cn}: {exc}")
+                sin_avance = 0
+                continue
             except RetryAgotadoError as exc:
                 estado.marcar_error_permanente(cn, str(exc))
                 notif.error(f"  [A] Agotados reintentos: {exc}")
@@ -622,6 +632,7 @@ def main():
     notif.resumen_final(
         completados = res.get(EstadoCaso.COMPLETADO, 0),
         existentes  = res.get(EstadoCaso.RECLAMO_EXISTENTE, 0),
+        canceladas  = res.get(EstadoCaso.POLIZA_CANCELADA, 0),
         errores     = res.get(EstadoCaso.ERROR_PERMANENTE, 0),
         total       = len(pendientes),
     )

@@ -207,6 +207,7 @@ def fill_generals_1(incident_type_code: str = "30",
     Raises FieldValidationError if an FRM modal appears (field left empty).
     """
     from datetime import date
+    from premium.common import is_slow_rdp
 
     hoy = date.today().strftime("%d-%m-%Y")
 
@@ -237,7 +238,12 @@ def fill_generals_1(incident_type_code: str = "30",
         log(f"  → Incident type '{incident_type_code}' accepted")
 
     _k(description, pause=0.20)
-    _k("{TAB}{TAB}{ENTER}", pause=0.60)
+    if is_slow_rdp():
+        _k("{TAB}{TAB}{ENTER}", pause=0.60)
+    else:
+        _k("{TAB}", pause=0.30)
+        _k("{TAB}", pause=0.30)
+        _k("{ENTER}", pause=0.60)
     log(f"  → Description entered: '{description}'")
     screenshot("paso_26_descripcion_siniestro.png", "description entered")
 
@@ -357,10 +363,23 @@ def fill_generals_2(cedula: str = "8-123-456",
     log(f"  → Nombre: {nombre}, Apellido: {apellido}")
 
     if sexo.upper() == "F":
-        _k("{RIGHT}{UP}{ENTER}{ENTER}", pause=0.30)
+        if is_slow_rdp():
+            _k("{RIGHT}{UP}{ENTER}{ENTER}", pause=0.30)
+        else:
+            _k("{RIGHT}", pause=0.30)
+            _k("{UP}",    pause=0.20)
+            _k("{ENTER}", pause=0.20)
+            _k("{ENTER}", pause=0.30)
         log("  → Sexo: FEMENINO")
     elif sexo.upper() == "M":
-        _k("{RIGHT}{UP}{UP}{ENTER}{ENTER}", pause=0.30)
+        if is_slow_rdp():
+            _k("{RIGHT}{UP}{UP}{ENTER}{ENTER}", pause=0.30)
+        else:
+            _k("{RIGHT}", pause=0.30)
+            _k("{UP}",    pause=0.20)
+            _k("{UP}",    pause=0.20)
+            _k("{ENTER}", pause=0.20)
+            _k("{ENTER}", pause=0.30)
         log("  → Sexo: MASCULINO")
     else:
         _k("{ENTER}", pause=0.30)
@@ -404,6 +423,7 @@ def fill_generals_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
     Raises FieldValidationError if an FRM modal appears.
     """
     import pyautogui
+    from premium.common import is_slow_rdp
 
     log("\n[→] Step 28 — Generales (3): damage description + adjuster...")
     screenshot("paso_28_inicio_generales3.png", "before clicking Generales (3) tab")
@@ -438,7 +458,12 @@ def fill_generals_3(descripcion_danos: str = "PRUEBA DESCRIPCION DANOS",
     if _click_label("campo_descripcion_danos.png", label="Descripción de daños"):
         time.sleep(0.30)
         _k(descripcion_danos, pause=0.20)
-        _k("{TAB}{TAB}{ENTER}", pause=0.60)
+        if is_slow_rdp():
+            _k("{TAB}{TAB}{ENTER}", pause=0.60)
+        else:
+            _k("{TAB}", pause=0.20)
+            _k("{TAB}", pause=0.20)
+            _k("{ENTER}", pause=0.60)
         screenshot("paso_28_descripcion_danos.png", "damage description entered")
         log(f"  → Damage description: '{descripcion_danos}'")
 

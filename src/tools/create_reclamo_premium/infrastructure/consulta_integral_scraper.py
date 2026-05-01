@@ -29,6 +29,17 @@ logger = logging.getLogger(__name__)
 
 _VIGI_FMT = "%d/%m/%Y"  # Formato real de la API: DD/MM/YYYY (ej: "11/02/2026" = 11 de febrero)
 
+# Valores de Estado que indican póliza cancelada (comparación case-insensitive).
+_ESTADOS_CANCELADOS = {"cancelada", "cancelado"}
+
+
+class PolizaCanceladaError(RuntimeError):
+    """
+    Raised when every policy covering the incident date is cancelled.
+    The case must be set aside for manual analyst review.
+    """
+    pass
+
 
 def _parse_json_response(data) -> list:
     """
@@ -185,46 +196,61 @@ class ConsultaIntegralClient:
         Selecciona la póliza correcta para la fecha del siniestro.
 
         Prioridad con fecha_siniestro:
-          1. Pólizas donde Vigi <= fecha_siniestro <= Vigf (cobertura exacta)
+          1. Pólizas donde Vigi <= fecha_siniestro <= Vigf y no canceladas
              → dentro del grupo, Estado=Vigente primero.
-          2. Si ninguna cubre exactamente: pólizas que iniciaron antes del
-             siniestro, ordenadas por Vigf descendente (la que expiró más
-             recientemente). Una póliza expirada es válida si el siniestro
-             ocurrió dentro de su período.
-          3. Fallback final: primera disponible (Estado=Vigente primero).
+             Si todas las que cubren la fecha están canceladas → PolizaCanceladaError.
+          2. Si ninguna cubre exactamente: pólizas anteriores no canceladas,
+             ordenadas por Vigf descendente.
+             Si todas las anteriores están canceladas → PolizaCanceladaError.
+          3. Fallback final: primera no cancelada (Estado=Vigente primero).
+             Si todas están canceladas → PolizaCanceladaError.
 
         Sin fecha_siniestro:
-          - Estado=Vigente primero, luego primera disponible.
+          - Primera no cancelada (Estado=Vigente primero).
         """
+        def _vi(p):
+            return _parse_vigi(p.get("Vigi", ""))
+
+        def _vf(p):
+            return _parse_vigi(p.get("Vigf", ""))
+
+        def _cubre(p) -> bool:
+            return _vi(p) is not None and _vf(p) is not None and _vi(p) <= fecha_dt <= _vf(p)
+
+        def _cancelada(p) -> bool:
+            return p.get("Estado", "").lower() in _ESTADOS_CANCELADOS
+
+        def _sort_vigente(lst: list) -> list:
+            return sorted(lst, key=lambda p: p.get("Estado", "") != "Vigente")
+
         if fecha_dt:
             # 1. Cobertura exacta
-            cubren = [
-                p for p in polizas
-                if _parse_vigi(p.get("Vigi", "")) is not None
-                and _parse_vigi(p.get("Vigf", "")) is not None
-                and _parse_vigi(p.get("Vigi", "")) <= fecha_dt <= _parse_vigi(p.get("Vigf", ""))
-            ]
+            cubren = [p for p in polizas if _cubre(p)]
+            validas = [p for p in cubren if not _cancelada(p)]
+            if validas:
+                return _sort_vigente(validas)[0]
             if cubren:
-                cubren.sort(key=lambda p: p.get("Estado", "") != "Vigente")
-                return cubren[0]
+                raise PolizaCanceladaError(
+                    f"Póliza(s) para '{placa}' cubren la fecha {fecha_dt}"
+                    " pero están todas canceladas"
+                )
 
             # 2. Iniciaron antes del siniestro → la de Vigf más reciente
-            anteriores = [
-                p for p in polizas
-                if _parse_vigi(p.get("Vigi", "")) is not None
-                and _parse_vigi(p.get("Vigi", "")) <= fecha_dt
-            ]
-            if anteriores:
-                anteriores.sort(
-                    key=lambda p: _parse_vigi(p.get("Vigf", "")) or date.min,
-                    reverse=True,
-                )
+            anteriores = [p for p in polizas if _vi(p) is not None and _vi(p) <= fecha_dt]
+            validas_ant = [p for p in anteriores if not _cancelada(p)]
+            if validas_ant:
+                validas_ant.sort(key=lambda p: _vf(p) or date.min, reverse=True)
                 logger.warning(
                     "CI: ninguna póliza cubre exactamente la fecha %s para placa '%s'"
                     " — usando la de vigencia más reciente (Vigf=%s)",
-                    fecha_dt, placa, anteriores[0].get("Vigf", ""),
+                    fecha_dt, placa, validas_ant[0].get("Vigf", ""),
                 )
-                return anteriores[0]
+                return validas_ant[0]
+            if anteriores:
+                raise PolizaCanceladaError(
+                    f"Póliza(s) para '{placa}' anteriores a la fecha {fecha_dt}"
+                    " están todas canceladas"
+                )
 
             logger.warning(
                 "CI: sin pólizas anteriores a la fecha %s para placa '%s'"
@@ -232,8 +258,14 @@ class ConsultaIntegralClient:
                 fecha_dt, placa,
             )
 
-        polizas_sorted = sorted(polizas, key=lambda p: p.get("Estado", "") != "Vigente")
-        return polizas_sorted[0]
+        # 3. Fallback: primera no cancelada (Estado=Vigente primero)
+        validas_fb = [p for p in polizas if not _cancelada(p)]
+        if validas_fb:
+            return _sort_vigente(validas_fb)[0]
+
+        raise PolizaCanceladaError(
+            f"Todas las pólizas para placa '{placa}' están canceladas"
+        )
 
     @staticmethod
     def _a_iso(fecha_str: str) -> str:

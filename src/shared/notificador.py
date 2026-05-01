@@ -70,12 +70,14 @@ class Notificador:
         self._telegram(f"ERROR: {mensaje}")
 
     def resumen_final(self, completados: int, existentes: int,
-                      errores: int, total: int) -> None:
+                      errores: int, total: int,
+                      canceladas: int = 0) -> None:
         lineas = [
             "Resumen de procesamiento nocturno:",
             f"  Total pendientes:  {total}",
             f"  Completados:       {completados}",
             f"  Ya existian:       {existentes}",
+            f"  Poliza cancelada:  {canceladas}",
             f"  Errores:           {errores}",
         ]
         texto = "\n".join(lineas)

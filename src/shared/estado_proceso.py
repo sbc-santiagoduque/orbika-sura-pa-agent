@@ -24,11 +24,16 @@ class EstadoCaso:
     COMPLETADO         = "COMPLETADO"
     RECLAMO_EXISTENTE  = "RECLAMO_EXISTENTE"
     ERROR_PERMANENTE   = "ERROR_PERMANENTE"
+    POLIZA_CANCELADA   = "POLIZA_CANCELADA"
 
-    _SALTAR = {COMPLETADO, RECLAMO_EXISTENTE}
+    _SALTAR = {COMPLETADO, RECLAMO_EXISTENTE, POLIZA_CANCELADA}
 
 
-_ESTADOS_FINALES_SKIP = {EstadoCaso.COMPLETADO, EstadoCaso.RECLAMO_EXISTENTE}
+_ESTADOS_FINALES_SKIP = {
+    EstadoCaso.COMPLETADO,
+    EstadoCaso.RECLAMO_EXISTENTE,
+    EstadoCaso.POLIZA_CANCELADA,
+}
 
 
 class EstadoProceso:
@@ -98,6 +103,12 @@ class EstadoProceso:
     def marcar_error_permanente(self, case_number: str, detalle: str = "") -> None:
         self._actualizar(case_number, {
             "estado":  EstadoCaso.ERROR_PERMANENTE,
+            "detalle": detalle,
+        })
+
+    def marcar_poliza_cancelada(self, case_number: str, detalle: str = "") -> None:
+        self._actualizar(case_number, {
+            "estado":  EstadoCaso.POLIZA_CANCELADA,
             "detalle": detalle,
         })
 

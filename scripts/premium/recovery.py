@@ -173,10 +173,15 @@ def is_at_main_menu() -> bool:
 def close_claim_and_return_home() -> None:
     """
     Close stacked MDI windows (claim, Coberturas, Automóviles, Endosos)
-    by clicking X until the main menu is detected. Max 10 iterations.
-    All confirmation popups during close are accepted with Enter (Sí).
+    by clicking X until the main menu is detected. Max 15 iterations.
+
+    After each X click, loops on close_forms_popup() up to 3 times —
+    Oracle Forms can show consecutive confirmation modals for a single
+    close (e.g. unsaved changes + inner child confirmation), so one
+    Enter is not always enough before the next X click is safe.
     """
-    _MAX = 10
+    _MAX = 15
+    _MAX_POPUPS = 3
 
     log("\n[→] Closing forms — returning to main screen...")
 
@@ -187,12 +192,18 @@ def close_claim_and_return_home() -> None:
 
         log(f"  → Closing MDI {attempt}...")
         close_endosos_form()
-        time.sleep(0.60)
+        time.sleep(0.50)
         screenshot(f"paso_cierre_{attempt:02d}.png", f"MDI close {attempt}")
 
-        if close_forms_popup():
+        dismissed = 0
+        for _ in range(_MAX_POPUPS):
+            if not close_forms_popup():
+                break
+            dismissed += 1
             time.sleep(0.25)
-            screenshot(f"paso_cierre_{attempt:02d}b_post_si.png", f"post-modal Sí ({attempt})")
+        if dismissed:
+            screenshot(f"paso_cierre_{attempt:02d}b_post_si.png",
+                       f"post-modal(s) Sí ({attempt}×{dismissed})")
     else:
         log(f"  [WARN] Reached {_MAX} close attempts without detecting main menu")
 
