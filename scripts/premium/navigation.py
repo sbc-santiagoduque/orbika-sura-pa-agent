@@ -102,6 +102,15 @@ def navigate_to_claim_apertura() -> bool:
         log(f"  [WARN] RDP window not found: {exc} — trying click-based navigation")
         return _navigate_by_click()
 
+    log("  → Midiendo latencia de teclado (RTT)...")
+    t0 = time.time()
+    rdp.type_keys("{F13}", pause=0.05, with_spaces=True)
+    latencia = time.time() - t0
+    log(f"  → RTT keystroke: {latencia:.2f}s")
+    if latencia > 2.0:
+        log(f"  [WARN] Latencia alta ({latencia:.1f}s/tecla) — cambiando a navegación por click")
+        return _navigate_by_click()
+
     def _k(keys, n=1, pause=0.35):
         for _ in range(n):
             rdp.type_keys(keys, pause=0.05, with_spaces=True)
