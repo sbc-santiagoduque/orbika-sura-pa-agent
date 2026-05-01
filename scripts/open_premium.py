@@ -94,7 +94,7 @@ from premium.recovery import (
 )
 from premium.forms import (
     fill_generals_1, fill_generals_2, fill_generals_3, fill_reserves,
-    save_claim, simulate_save, go_back_one_tab,
+    fill_formulario, save_claim, simulate_save,
 )
 
 
@@ -161,6 +161,11 @@ def main():
     if args.step in _FORM_STEPS:
         args.no_rdp = True
         args.no_premium = True
+
+    # ── Traer ventana RDP al frente si ya está activa ─────────────────────────
+    # Se activa tanto cuando --step es un form step como cuando se pasan
+    # --no-rdp explícitamente (ej: desde procesar_casos.py con RDP ya activo).
+    if args.no_rdp:
         import pygetwindow as gw
         try:
             rdp_wins = [t for t in gw.getAllTitles()
@@ -177,9 +182,12 @@ def main():
         except Exception as e:
             log(f"[WARN] No se pudo traer ventana RDP al frente: {e}")
 
-    skip_login      = args.step in ("rdp", "premium", "apertura",
-                                    "generales1", "generales2", "generales3",
-                                    "reservas", "formulario")
+    # Si se saltan tanto RDP como Premium, asumimos que ya estamos conectados
+    # y logueados — no intentar login de nuevo (evita escribir credenciales en el menú principal).
+    skip_login      = (args.step in ("rdp", "premium", "apertura",
+                                     "generales1", "generales2", "generales3",
+                                     "reservas", "formulario")
+                       or (args.no_rdp and args.no_premium))
     skip_apertura   = args.step in ("rdp", "premium", "login",
                                     "generales1", "generales2", "generales3",
                                     "reservas", "formulario")
@@ -327,95 +335,98 @@ def main():
             select_collision_coverage()
 
         # ── Formulario ────────────────────────────────────────────────────────
-        if not skip_generales1:
-            _sin = datos.get("siniestro") or {}
-            _tipo_codigo = incident_type_to_code(_sin.get("tipo", "")) or args.tipo_siniestro
-            for _intento in range(1, 3):
-                try:
-                    fill_generals_1(
-                        incident_type_code=_tipo_codigo,
-                        description=_sin.get("descripcion", "") or "SIN DESCRIPCION",
-                        incident_time=_sin.get("hora", "") or "00:00",
-                        incident_place=_sin.get("lugar", "") or "PANAMA",
-                    )
-                    break
-                except FieldValidationError as exc:
-                    if _intento < 2:
-                        log(f"  [RETRY G1] {exc} — reintentando...")
-                        go_back_one_tab(exc.tab)
-                    else:
-                        raise
+        _sin  = datos.get("siniestro") or {}
+        _con  = datos.get("conductor") or {}
+        _pol  = datos.get("poliza") or {}
+        _tipo_codigo = incident_type_to_code(_sin.get("tipo", "")) or args.tipo_siniestro
 
-        if not skip_generales2:
-            _con = datos.get("conductor") or {}
-            for _intento in range(1, 3):
-                try:
-                    fill_generals_2(
-                        cedula=_con.get("cedula", "") or "",
-                        nombre=(_con.get("nombre", "") or "").upper(),
-                        apellido=(_con.get("apellido", "") or "").upper(),
-                        sexo=_con.get("sexo", "M") or "M",
-                        edad=str(_con.get("edad", "") or ""),
-                        responsabilidad=_con.get("responsabilidad", "Culpable") or "Culpable",
-                    )
-                    break
-                except FieldValidationError as exc:
-                    if _intento < 2:
-                        log(f"  [RETRY G2] {exc} — reintentando...")
-                        go_back_one_tab(exc.tab)
-                    else:
-                        raise
-
-        if not skip_generales3:
-            _sin3 = datos.get("siniestro") or {}
-            for _intento in range(1, 3):
-                try:
-                    fill_generals_3(
-                        descripcion_danos=_sin3.get("descripcion_danos", "") or "SIN DESCRIPCION",
-                        ajustador_interno=str(datos.get("ajustador_interno", 158) or 158),
-                    )
-                    break
-                except FieldValidationError as exc:
-                    if _intento < 2:
-                        log(f"  [RETRY G3] {exc} — reintentando...")
-                        go_back_one_tab(exc.tab)
-                    else:
-                        raise
-
-        if not skip_reservas:
-            _pol = datos.get("poliza") or {}
-            for _intento in range(1, 3):
-                try:
-                    fill_reserves(
-                        coverage_code=coverage_to_code(_pol.get("cobertura", "")),
-                        reserve_amount=str(int(_pol.get("reserva", 1300) or 1300)),
-                    )
-                    break
-                except FieldValidationError as exc:
-                    if _intento < 2:
-                        log(f"  [RETRY RES] {exc} — reintentando...")
-                        go_back_one_tab(exc.tab)
-                    else:
-                        raise
+        _formulario_filled = False
+        if not (skip_generales1 or skip_generales2 or skip_generales3 or skip_reservas):
+            # Flujo completo — retry unificado entre tabs
+            fill_formulario(
+                g1_kwargs=dict(
+                    incident_type_code=_tipo_codigo,
+                    description=_sin.get("descripcion", "") or "SIN DESCRIPCION",
+                    incident_time=_sin.get("hora", "") or "00:00",
+                    incident_place=_sin.get("lugar", "") or "PANAMA",
+                ),
+                g2_kwargs=dict(
+                    cedula=_con.get("cedula", "") or "",
+                    nombre=(_con.get("nombre", "") or "").upper(),
+                    apellido=(_con.get("apellido", "") or "").upper(),
+                    sexo=_con.get("sexo", "M") or "M",
+                    edad=str(_con.get("edad", "") or ""),
+                    responsabilidad=_con.get("responsabilidad", "Culpable") or "Culpable",
+                ),
+                g3_kwargs=dict(
+                    descripcion_danos=_sin.get("descripcion_danos", "") or "SIN DESCRIPCION",
+                    ajustador_interno=str(datos.get("ajustador_interno", 158) or 158),
+                ),
+                res_kwargs=dict(
+                    coverage_code=coverage_to_code(_pol.get("cobertura", "")),
+                    reserve_amount=str(int(_pol.get("reserva", 1300) or 1300)),
+                ),
+            )
+            _formulario_filled = True
+        else:
+            # Ejecución individual por tab (modo --step generalesN para debug)
+            if not skip_generales1:
+                fill_generals_1(
+                    incident_type_code=_tipo_codigo,
+                    description=_sin.get("descripcion", "") or "SIN DESCRIPCION",
+                    incident_time=_sin.get("hora", "") or "00:00",
+                    incident_place=_sin.get("lugar", "") or "PANAMA",
+                )
+                _formulario_filled = True
+            if not skip_generales2:
+                fill_generals_2(
+                    cedula=_con.get("cedula", "") or "",
+                    nombre=(_con.get("nombre", "") or "").upper(),
+                    apellido=(_con.get("apellido", "") or "").upper(),
+                    sexo=_con.get("sexo", "M") or "M",
+                    edad=str(_con.get("edad", "") or ""),
+                    responsabilidad=_con.get("responsabilidad", "Culpable") or "Culpable",
+                )
+                _formulario_filled = True
+            if not skip_generales3:
+                fill_generals_3(
+                    descripcion_danos=_sin.get("descripcion_danos", "") or "SIN DESCRIPCION",
+                    ajustador_interno=str(datos.get("ajustador_interno", 158) or 158),
+                )
+                _formulario_filled = True
+            if not skip_reservas:
+                fill_reserves(
+                    coverage_code=coverage_to_code(_pol.get("cobertura", "")),
+                    reserve_amount=str(int(_pol.get("reserva", 1300) or 1300)),
+                )
+                _formulario_filled = True
 
         if args.guardar:
-            try:
-                numero = save_claim()
-                log(f"\n[✓] RECLAMO CREADO — No.: {numero}")
-                close_claim_and_return_home()
-            except UnauthorizedError as exc:
-                log(f"\n[!] NO AUTORIZADO — {exc}")
-                close_claim_and_return_home()
-                sys.exit(5)
-            except ClaimAlreadyExistsError as exc:
-                log(f"\n[!] RECLAMO YA EXISTE — {exc}")
-                close_claim_and_return_home()
-                sys.exit(2)
+            if not _formulario_filled:
+                log("\n[WARN] --guardar ignorado — ningún tab de formulario fue llenado en este paso.")
+                log("       Usa --step all o --step formulario para llenar y guardar.")
+            else:
+                try:
+                    numero = save_claim()
+                    log(f"\n[✓] RECLAMO CREADO — No.: {numero}")
+                    close_claim_and_return_home()
+                except UnauthorizedError as exc:
+                    log(f"\n[!] NO AUTORIZADO — {exc}")
+                    close_claim_and_return_home()
+                    sys.exit(5)
+                except ClaimAlreadyExistsError as exc:
+                    log(f"\n[!] RECLAMO YA EXISTE — {exc}")
+                    close_claim_and_return_home()
+                    sys.exit(2)
         elif args.simular_guardar:
-            simulate_save()
-            close_claim_and_return_home()
+            if not _formulario_filled:
+                log("\n[WARN] --simular-guardar ignorado — ningún tab de formulario fue llenado en este paso.")
+            else:
+                simulate_save()
+                close_claim_and_return_home()
         else:
-            log("\n[i] Formulario listo. Usar --guardar para crear el reclamo.")
+            if _formulario_filled:
+                log("\n[i] Formulario listo. Usar --guardar para crear el reclamo.")
 
         log(f"\n[✓] Listo. Capturas en: {CAPTURES_DIR}")
         log(f"    Abrí la carpeta: explorer {CAPTURES_DIR}")
@@ -429,6 +440,7 @@ def main():
     except IncidentOutOfCoverageError as exc:
         log(f"\n[!] SINIESTRO FUERA DE VIGENCIA — {exc}")
         log("    La fecha del siniestro no está cubierta por ningún endoso — requiere revisión manual.")
+        close_claim_and_return_home()
         sys.exit(4)
 
     except FieldValidationError as exc:

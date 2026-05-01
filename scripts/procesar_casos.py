@@ -365,10 +365,12 @@ def _ejecutar_fase_b(datos_json_path: str, guardar: bool = False,
     (abre RDP, loga en Premium y corre apertura).
     """
     if _rdp_activo():
+        # RDP activo → Premium ya abierto y logueado → saltar conexión y login
         cmd = [
             sys.executable,
             str(_SCRIPT_DIR / "open_premium.py"),
-            "--step", "apertura",
+            "--no-rdp",
+            "--no-premium",
             "--datos-json", datos_json_path,
         ]
     else:
@@ -415,8 +417,8 @@ def main():
                         help="Omitir watchdog de VPN (sesion ya estable)")
     parser.add_argument("--caso",           default=None,
                         help="Procesar solo este Case Number (util para pruebas paso a paso)")
-    parser.add_argument("--casos",          default=None,
-                        help="Procesar solo estos Case Numbers separados por coma (ej: 02213748,2213735)")
+    parser.add_argument("--casos",          default=None, nargs="+",
+                        help="Procesar solo estos Case Numbers separados por coma o espacio (ej: 02213748,02213735 o 02213748 02213735)")
     parser.add_argument("--max-casos",      type=int, default=None,
                         help="Limitar a los primeros N casos pendientes")
     parser.add_argument("--max-sin-avance", type=int, default=_MAX_SIN_AVANCE_DEFAULT,
@@ -461,7 +463,8 @@ def main():
     )
 
     if args.casos:
-        _filtro = {cn.strip() for cn in args.casos.split(",")}
+        _raw = " ".join(args.casos)  # une tokens por si el usuario puso espacio tras la coma
+        _filtro = {cn.strip() for cn in _raw.replace(",", " ").split() if cn.strip()}
         pendientes = [c for c in pendientes if c["case_number"] in _filtro]
         if not pendientes:
             notif.info(f"Ninguno de los casos {_filtro} está pendiente en este reporte.")

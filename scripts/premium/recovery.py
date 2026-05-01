@@ -5,6 +5,48 @@ import time
 from premium.common import T, log, screenshot, find_on_screen
 
 
+def detect_modal_type() -> str:
+    """
+    Classify the Oracle Forms modal currently on screen.
+    Returns 'frm_validation' | 'unauthorized' | 'close_confirm' | 'unknown' | 'none'.
+
+    Requires templates in docs/screens/:
+      modal_frm_validation.png  — FRM-40202 'Se debe ingresar al campo' (blue !, OK)
+      modal_unauthorized.png    — error de autorización / permisos
+      modal_cerrar_pantalla.png — '¿Cerrar esta pantalla?' (yellow ⚠, Sí/No)
+                                   Aparece al cerrar sin completar campos.
+                                   En go_back_one_tab: Sí (Enter) — cierre intencional.
+                                   En save_claim: No (Tab+Enter) — cierre inesperado.
+
+    Sin esos templates, cualquier modal visible devuelve 'unknown' y se
+    guarda una captura para facilitar la creación del template.
+    """
+    generic_tpl  = T("titlebar_forms_modal.png")
+    fallback_tpl = T("modal_ok_forms.png")
+    tpl = generic_tpl if os.path.isfile(generic_tpl) else (
+          fallback_tpl if os.path.isfile(fallback_tpl) else None)
+    if tpl is None or find_on_screen(tpl, confidence=0.75) is None:
+        return "none"
+
+    frm_tpl    = T("modal_frm_validation.png")
+    unauth_tpl = T("modal_unauthorized.png")
+    close_tpl  = T("modal_cerrar_pantalla.png")
+
+    if os.path.isfile(frm_tpl) and find_on_screen(frm_tpl, confidence=0.80) is not None:
+        return "frm_validation"
+
+    if os.path.isfile(unauth_tpl) and find_on_screen(unauth_tpl, confidence=0.80) is not None:
+        return "unauthorized"
+
+    if os.path.isfile(close_tpl) and find_on_screen(close_tpl, confidence=0.80) is not None:
+        return "close_confirm"
+
+    screenshot("modal_tipo_desconocido.png",
+               "modal visible — tipo no identificado, recortar para crear template")
+    log("  [WARN] Modal detectado sin tipo identificado — ver modal_tipo_desconocido.png")
+    return "unknown"
+
+
 def close_forms_popup() -> bool:
     """
     Detect any Oracle Forms popup (titlebar_forms_modal.png).

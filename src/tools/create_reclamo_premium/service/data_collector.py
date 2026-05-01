@@ -6,18 +6,18 @@ Fuente secundaria: ConsultaIntegralScraper (fallback para póliza/cobertura
 si SIC no los tiene, o para validación cruzada).
 
 Mappings desde campos reales de la API SIC:
-  noPoliza                → numero_poliza
-  eventDateSinister       → siniestro.fecha
-  timeSinister            → siniestro.hora (truncar a HH:MM)
-  placeDirectionSinister  → siniestro.lugar
-  storyDetail             → siniestro.descripcion (Generales 1)
-  VehicleInjuryA          → siniestro.descripcion_danos (Generales 3)
+  noPoliza                  → numero_poliza
+  eventDateSinister         → siniestro.fecha
+  timeSinister              → siniestro.hora (truncar a HH:MM)
+  cantonDirectionSinister   → siniestro.lugar (lookup en _PANAMA_CANTONS; fallback placeDirectionSinister)
+  storyDetail               → siniestro.descripcion (Generales 1)
+  VehicleInjuryA            → siniestro.descripcion_danos (Generales 3)
   coverages[0].coverageName → tipo de siniestro + cobertura para reserva
-  driverId                → conductor.cedula
+  driverId                  → conductor.cedula
   driverName/driverLastName → conductor.nombre/apellido
-  driverGender            → conductor.sexo (ver TODO en sic_reclamo_client.py)
-  driverBirthDate         → conductor.edad (calculado)
-  IndResponsible          → conductor.responsabilidad ("2" → "Inocente"; todo lo demás → "Culpable")
+  driverGender              → conductor.sexo (ver TODO en sic_reclamo_client.py)
+  driverBirthDate           → conductor.edad (calculado)
+  IndResponsible            → conductor.responsabilidad ("2" → "Inocente"; todo lo demás → "Culpable")
 """
 import logging
 from datetime import date
@@ -26,7 +26,6 @@ from src.tools.create_reclamo_premium.infrastructure.sic_reclamo_client import (
     SICReclamoClient,
     _GENDER_MAP,
     _determinar_tipo_siniestro,
-    _determinar_reserva,
 )
 from src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper import (
     ConsultaIntegralScraper,
@@ -41,6 +40,40 @@ from src.tools.create_reclamo_premium.service.reclamo_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Monto de reserva fijo por decisión del equipo de operaciones de Sura Panamá.
+# El algoritmo de inferencia por cobertura (_determinar_reserva en sic_reclamo_client)
+# queda disponible para referencia pero NO se usa — el equipo es quien decide el monto.
+_RESERVA_FIJA = 1300.0
+
+# Panamá: código de provincia → nombre (confirmado desde dropdown SIC).
+# cantonDirectionSinister tiene formato PDD (3 dígitos: provincia 1-9)
+# o PPDD (4 dígitos: provincias/comarcas 10-12). Los últimos 2 dígitos son
+# el ordinal del distrito dentro de la provincia — se descartan para el lugar.
+_PANAMA_PROVINCES: dict[str, str] = {
+    "1":  "Bocas del Toro",
+    "2":  "Coclé",
+    "3":  "Colón",
+    "4":  "Chiriquí",
+    "5":  "Darién",
+    "6":  "Herrera",
+    "7":  "Los Santos",
+    "8":  "Panamá",
+    "9":  "Veraguas",
+    "10": "Comarca Kuna Yala",
+    "11": "Comarca Ngabe Bugle",
+    "12": "Panamá Oeste",
+}
+
+
+def _canton_code_to_province(canton_code: str) -> str | None:
+    """'411' → 'Chiriquí', '1201' → 'Panamá Oeste'. None si código desconocido."""
+    code = canton_code.strip()
+    if len(code) == 3:
+        return _PANAMA_PROVINCES.get(code[0])
+    if len(code) == 4:
+        return _PANAMA_PROVINCES.get(code[:2])
+    return None
 
 
 def _calcular_edad(birth_date_str: str) -> int:
@@ -172,11 +205,11 @@ class DataCollector:
         hora_raw = evento.get("timeSinister") or evento.get("time", "")
         hora = hora_raw[:5] if hora_raw else ""  # "12:14:00" → "12:14"
 
+        canton_code = str(evento.get("cantonDirectionSinister") or "").strip()
         lugar = (
-            evento.get("placeDirectionSinister")
-            or evento.get("placeDirection", "")
-            or "Panamá"
-        ).strip()
+            _canton_code_to_province(canton_code)
+            or (evento.get("placeDirectionSinister") or "Panamá").strip()
+        )
 
         # Relato del conductor → Generales 1
         descripcion = (evento.get("storyDetail") or "").strip()
@@ -201,13 +234,25 @@ class DataCollector:
 
     @staticmethod
     def _extraer_conductor(evento: dict) -> DatosConductor:
-        """Mapea campos del detalle de evento SIC a DatosConductor."""
+        """Mapea campos del detalle de evento SIC a DatosConductor.
+
+        Premium espera dos casillas de nombre:
+          [Primer nombre]  [Segundo nombre + Apellido]
+        driverName puede venir con uno o dos nombres ("JUAN" o "JUAN CARLOS"),
+        así que se toma solo la primera palabra como primer nombre y el resto
+        se antepone al apellido.
+        """
         fecha_nacimiento = (evento.get("driverBirthDate") or "")[:10]
         cedula   = evento.get("driverId", "")
-        nombre   = evento.get("driverName", "")
-        apellido = (evento.get("driverLastName") or "").strip()
-        sexo     = _mapear_genero(evento.get("driverGender"))
-        edad     = _calcular_edad(fecha_nacimiento)
+        apellido_raw = (evento.get("driverLastName") or "").strip()
+
+        nombre_parts = (evento.get("driverName") or "").split()
+        nombre  = nombre_parts[0] if nombre_parts else ""
+        segundo = " ".join(nombre_parts[1:]) if len(nombre_parts) > 1 else ""
+        apellido = " ".join(filter(None, [segundo, apellido_raw]))
+
+        sexo    = _mapear_genero(evento.get("driverGender"))
+        edad    = _calcular_edad(fecha_nacimiento)
         responsabilidad = _mapear_responsabilidad(evento.get("IndResponsible", ""))
 
         return DatosConductor(
@@ -253,5 +298,4 @@ class DataCollector:
         coverages = evento.get("coverages") or []
         cobertura = coverages[0].get("coverageName", "") if coverages else ""
 
-        reserva = _determinar_reserva(cobertura)
-        return numero_poliza, DatosPoliza(cobertura=cobertura, reserva=reserva)
+        return numero_poliza, DatosPoliza(cobertura=cobertura, reserva=_RESERVA_FIJA)

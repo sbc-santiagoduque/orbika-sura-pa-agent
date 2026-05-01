@@ -25,6 +25,43 @@ def _close_forms_popup():
     return close_forms_popup()
 
 
+def _close_modal_no():
+    from premium.recovery import close_modal_no
+    return close_modal_no()
+
+
+def _detect_modal_type():
+    from premium.recovery import detect_modal_type
+    return detect_modal_type()
+
+
+def _click_x_apertura() -> bool:
+    """
+    Click the X button of the Apertura del Reclamo MDI child — ONE click only.
+    Uses titlebar_consulta_endosos.png (same template, same MDI X button style).
+    Unlike close_endosos_form(), this is intentionally single-shot to avoid
+    closing other MDI windows that must stay open (Coberturas, Automoviles).
+    """
+    import pyautogui
+    tpl = T("titlebar_consulta_endosos.png")
+    if not os.path.isfile(tpl):
+        log("  [WARN] titlebar_consulta_endosos.png not found — cannot click X")
+        return False
+    try:
+        loc = pyautogui.locateOnScreen(tpl, confidence=0.80)
+        if loc:
+            cx = int(loc.left + loc.width  / 2)
+            cy = int(loc.top  + loc.height / 2)
+            pyautogui.click(cx, cy)
+            time.sleep(0.60)
+            log("  -> X clicked on Apertura del Reclamo")
+            return True
+        log("  [WARN] Apertura del Reclamo X button not found on screen")
+    except Exception as exc:
+        log(f"  [WARN] Error clicking X: {exc}")
+    return False
+
+
 def _type_keys(rdp, keys, n=1, pause=0.25) -> None:
     for _ in range(n):
         rdp.type_keys(keys, pause=0.05, with_spaces=True)
@@ -56,85 +93,103 @@ def _click_label(template_name: str, offset_x: int = _OFFSET_INPUT,
 
 def assert_no_frm_modal(tab: str = "") -> None:
     """
-    Check for an active FRM modal (FRM-40202 or similar).
-    If detected: dismiss with Enter and raise FieldValidationError so the
-    caller can go back one tab and retry.
+    Check for an active modal after filling a tab.
+    Uses detect_modal_type() to raise the correct exception:
+    - frm_validation → FieldValidationError (retryable via fill_formulario)
+    - unauthorized   → UnauthorizedError (fatal — no retry)
+    - close_confirm  → FieldValidationError (press No to cancel close, then retry)
+    - unknown        → FieldValidationError (treated as FRM — screenshot saved)
+    - none           → no-op
     """
-    if _close_forms_popup():
+    mtype = _detect_modal_type()
+    if mtype == "none":
+        return
+    if mtype == "frm_validation":
+        _close_forms_popup()
         raise FieldValidationError(
-            f"FRM modal detected on tab '{tab}' — required field empty",
-            tab=tab,
-        )
+            f"FRM modal detected on tab '{tab}' — required field empty", tab=tab)
+    if mtype == "unauthorized":
+        _close_forms_popup()
+        raise UnauthorizedError(f"Sin autorización en tab '{tab}'")
+    if mtype == "close_confirm":
+        _close_modal_no()  # Tab+Enter → No — cancel unexpected close
+        raise FieldValidationError(
+            f"Modal cierre detectado en tab '{tab}' — campo vacío", tab=tab)
+    # unknown
+    _close_forms_popup()
+    raise FieldValidationError(
+        f"Modal desconocido en tab '{tab}' — ver modal_tipo_desconocido.png", tab=tab)
 
 
 def go_back_one_tab(failed_tab: str) -> None:
     """
-    Navigate back to the previous tab and re-enter failed_tab.
-    Used to reset Oracle Forms state when FRM-40202 blocked a fill step.
-    Anchors on tab_generales_2.png; uses offsets for G1/G3 and tab_reservas.png for Reserves.
+    Close ONLY the Apertura del Reclamo after an FRM-40202 validation failure.
+
+    Flow:
+    1. Pre-X: dismiss any FRM modal already on screen (may appear while filling)
+    2. Click X on Apertura del Reclamo — single shot, do NOT loop
+    3. Post-X loop: FRM may reappear during close; close_confirm (¿Cerrar esta
+       pantalla? ⚠) is accepted with Enter (= Sí, default focus). Both types
+       handled by close_forms_popup() until no modal detected.
+    Returns with Consulta de Coberturas visible.
+    fill_formulario calls _reenter_apertura_from_coberturas() next.
+    """
+    _MAX_DISMISS = 5
+    log(f"  [RETRY] '{failed_tab}' FRM error — closing Apertura del Reclamo...")
+
+    # Step 1: pre-X — dismiss the FRM modal already on screen from the tab fill
+    for _pre in range(_MAX_DISMISS):
+        mtype = _detect_modal_type()
+        if mtype in ("frm_validation", "unknown"):
+            log(f"  [RETRY] Pre-X modal '{mtype}' — dismissing...")
+            _close_forms_popup()
+            time.sleep(0.30)
+        else:
+            break
+
+    # Step 2: single-shot X click (does NOT loop — only closes Apertura del Reclamo)
+    _click_x_apertura()
+    time.sleep(0.50)
+
+    # Step 3: post-X loop — FRM reappearances + close_confirm → Sí (Enter)
+    for attempt in range(1, _MAX_DISMISS + 1):
+        mtype = _detect_modal_type()
+        if mtype == "none":
+            break
+        log(f"  [RETRY] Post-X modal '{mtype}' — dismissing ({attempt}/{_MAX_DISMISS})...")
+        _close_forms_popup()   # Enter: OK for FRM, Sí for close_confirm (default focus)
+        time.sleep(0.40)
+
+    screenshot(f"retry_coberturas_from_{failed_tab}.png",
+               f"Consulta de Coberturas after '{failed_tab}' failure")
+    log("  [RETRY] Back at Consulta de Coberturas — manito will re-open Apertura")
+
+
+def _reenter_apertura_from_coberturas() -> bool:
+    """
+    Click the manito (boton_seleccionar_cobertura.png) on Consulta de Coberturas
+    to re-open Apertura del Reclamo. The coverage row stays selected from the
+    previous attempt so no Down navigation is needed.
     """
     import pyautogui
-
-    log(f"  [RETRY] Stepping back from '{failed_tab}' to retry...")
-
+    tpl = T("boton_seleccionar_cobertura.png")
+    if not os.path.isfile(tpl):
+        log("  [WARN] boton_seleccionar_cobertura.png not found — cannot re-enter Apertura")
+        return False
     try:
-        rdp = _get_rdp()
-        rdp.type_keys("{ESC}", pause=0.05, with_spaces=True)
-        time.sleep(0.25)
-        rdp.type_keys("{ESC}", pause=0.05, with_spaces=True)
-        time.sleep(0.30)
-    except Exception:
-        pass
-
-    tab2_tpl = T("tab_generales_2.png")
-    res_tpl  = T("tab_reservas.png")
-
-    def _click_tab(x, y):
-        pyautogui.click(x, y)
-        time.sleep(0.70)
-
-    def _loc_g2():
-        try:
-            loc = pyautogui.locateOnScreen(tab2_tpl, confidence=0.80)
-            return loc if (loc and loc.left > 100) else None
-        except Exception:
-            return None
-
-    loc = _loc_g2()
-    if loc is None:
-        log("  [WARN] tab_generales_2.png not found — cannot navigate back")
-        return
-
-    g2_cx = int(loc.left + loc.width / 2)
-    g2_cy = int(loc.top  + loc.height / 2)
-    g1_cx = int(loc.left - loc.width * 0.5)
-    g3_cx = int(loc.left + loc.width * 1.5)
-
-    if failed_tab == "generals1":
-        _click_tab(g1_cx, g2_cy)
-
-    elif failed_tab == "generals2":
-        _click_tab(g1_cx, g2_cy)
-        loc = _loc_g2()
+        loc = pyautogui.locateOnScreen(tpl, confidence=0.80)
         if loc:
-            _click_tab(int(loc.left + loc.width / 2), g2_cy)
-
-    elif failed_tab == "generals3":
-        _click_tab(g2_cx, g2_cy)
-        _click_tab(g3_cx, g2_cy)
-
-    elif failed_tab == "reserves":
-        _click_tab(g3_cx, g2_cy)
-        try:
-            loc_r = pyautogui.locateOnScreen(res_tpl, confidence=0.80)
-            if loc_r:
-                _click_tab(int(loc_r.left + loc_r.width / 2),
-                           int(loc_r.top  + loc_r.height / 2))
-        except Exception:
-            pass
-
-    screenshot(f"retry_tab_{failed_tab}.png", f"after stepping back to '{failed_tab}'")
-    log(f"  [RETRY] Ready to retry '{failed_tab}'")
+            cx = int(loc.left + loc.width / 2)
+            cy = int(loc.top  + loc.height / 2)
+            pyautogui.click(cx, cy)
+            time.sleep(1.20)
+            screenshot("retry_apertura_abierta.png", "Apertura del Reclamo re-opened via manito")
+            log("  -> Apertura del Reclamo re-opened")
+            return True
+        log("  [WARN] boton_seleccionar_cobertura not found on Coberturas screen")
+    except Exception as exc:
+        log(f"  [WARN] Error clicking manito: {exc}")
+    return False
 
 
 def fill_generals_1(incident_type_code: str = "30",
@@ -483,7 +538,21 @@ def fill_reserves(coverage_code: str = "E",
     screenshot("paso_29_monto_reserva.png", f"amount {reserve_amount} entered — ready to save")
     log(f"  → Reserve amount: {reserve_amount}")
 
-    assert_no_frm_modal("reserves")
+    # Reserves: distinguish modal type — FRM is retryable, unauthorized is not
+    _mtype = _detect_modal_type()
+    if _mtype == "frm_validation":
+        _close_forms_popup()
+        raise FieldValidationError("FRM campo requerido en Reservas", tab="reserves")
+    elif _mtype == "unauthorized":
+        _close_forms_popup()
+        raise UnauthorizedError("Sin autorización en Reservas — cobertura o monto no permitido")
+    elif _mtype == "close_confirm":
+        _close_modal_no()  # Tab+Enter → No — stay on form
+        raise FieldValidationError("Modal cierre en Reservas — campo vacío", tab="reserves")
+    elif _mtype == "unknown":
+        _close_forms_popup()
+        log("  [WARN] Modal tipo desconocido en Reservas — ver modal_tipo_desconocido.png")
+        raise FieldValidationError("Modal tipo desconocido en Reservas (captura guardada)", tab="reserves")
     log("[OK] Reserves complete")
     return True
 
@@ -519,10 +588,24 @@ def save_claim() -> str | None:
     screenshot("paso_30_guardado.png", "post-save")
 
     time.sleep(1.50)
-    if _close_forms_popup():
-        screenshot("paso_30_error_guardado.png", "modal blocked save")
+    _mtype = _detect_modal_type()
+    if _mtype == "frm_validation":
+        screenshot("paso_30_error_validacion.png", "FRM validation blocked save")
+        _close_forms_popup()
+        raise FieldValidationError("FRM campo requerido al guardar — form incompleto", tab="reserves")
+    elif _mtype == "unauthorized":
+        screenshot("paso_30_error_autorizacion.png", "unauthorized modal blocked save")
+        _close_forms_popup()
+        raise UnauthorizedError("Sin autorización para guardar el reclamo")
+    elif _mtype == "close_confirm":
+        screenshot("paso_30_modal_cierre.png", "close_confirm blocked save — pressing No")
+        _close_modal_no()  # Tab+Enter → No — cancel unexpected close
+        raise FieldValidationError("Modal cierre bloqueó el guardado — form incompleto", tab="reserves")
+    elif _mtype == "unknown":
+        screenshot("paso_30_modal_desconocido.png", "unknown modal blocked save")
+        _close_forms_popup()
         raise UnauthorizedError(
-            "A modal blocked the save — user lacks permissions or validation error"
+            "Modal desconocido bloqueó el guardado — ver paso_30_modal_desconocido.png"
         )
 
     log("  → Claim saved")
@@ -675,3 +758,59 @@ def simulate_save() -> None:
         log("    1. Open paso_sim_03_contexto_g1_completo.png")
         log("    2. Crop only the text 'No. de Reclamo' (not the field)")
         log(f"    3. Save as: {T('label_no_reclamo.png')}")
+
+
+_FILL_ORDER = ("generals1", "generals2", "generals3", "reserves")
+
+
+def fill_formulario(
+    g1_kwargs: dict,
+    g2_kwargs: dict,
+    g3_kwargs: dict,
+    res_kwargs: dict,
+    *,
+    max_retries: int = 4,
+) -> None:
+    """
+    Fill all apertura form tabs in sequence with unified retry.
+
+    On FieldValidationError: go_back_one_tab(exc.tab) dismisses any
+    "save?" modals (via close_modal_no) then restarts from exc.tab.
+    max_retries caps total failures across all tabs combined.
+    """
+    _fns: dict = {
+        "generals1": lambda: fill_generals_1(**g1_kwargs),
+        "generals2": lambda: fill_generals_2(**g2_kwargs),
+        "generals3": lambda: fill_generals_3(**g3_kwargs),
+        "reserves":  lambda: fill_reserves(**res_kwargs),
+    }
+
+    start_from = "generals1"
+    retries = 0
+
+    while True:
+        start_idx = _FILL_ORDER.index(start_from)
+        error_this_pass = False
+
+        for tab in _FILL_ORDER[start_idx:]:
+            try:
+                _fns[tab]()
+            except FieldValidationError as exc:
+                error_this_pass = True
+                retries += 1
+                if retries >= max_retries:
+                    log(f"  [ABORT] Max retries ({max_retries}) reached on tab '{exc.tab}'")
+                    raise
+                log(f"  [RETRY {retries}/{max_retries}] FRM on '{exc.tab}' — closing form, re-entering...")
+                go_back_one_tab(exc.tab)
+                if not _reenter_apertura_from_coberturas():
+                    log("  [WARN] Could not re-enter Apertura — aborting retry")
+                    raise FieldValidationError(
+                        f"No se pudo re-entrar a Apertura tras fallo en '{exc.tab}'",
+                        tab=exc.tab,
+                    )
+                start_from = "generals1"
+                break
+
+        if not error_this_pass:
+            return

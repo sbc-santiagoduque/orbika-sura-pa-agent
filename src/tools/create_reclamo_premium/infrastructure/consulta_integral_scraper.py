@@ -14,7 +14,7 @@ Sin autenticación adicional.
 
 Notas:
   - CI no expone nombre de cobertura — ese campo viene de SIC (coverages[0].coverageName).
-  - Vigi/Vigf en formato MM/DD/YYYY (observado: "07/01/2026").
+  - Vigi/Vigf en formato DD/MM/YYYY (ej: "11/02/2026" = 11 de febrero de 2026).
   - Cuando hay varios asegurados para una placa, se consultan pólizas de todos
     y se selecciona la que cubre la fecha del siniestro.
 """
@@ -27,7 +27,7 @@ import json as _json
 
 logger = logging.getLogger(__name__)
 
-_VIGI_FMT = "%m/%d/%Y"  # Formato observado en la API: "07/01/2026"
+_VIGI_FMT = "%d/%m/%Y"  # Formato real de la API: DD/MM/YYYY (ej: "11/02/2026" = 11 de febrero)
 
 
 def _parse_json_response(data) -> list:

@@ -74,12 +74,12 @@ GET  /api/v1/events/{EventId}
 | `noPoliza` | `numero_poliza` | Disponible directo — CI no necesario si está presente |
 | `eventDateSinister` | `siniestro.fecha` | Formato ISO date |
 | `timeSinister` | `siniestro.hora` | Truncado a `HH:MM` |
-| `placeDirectionSinister` | `siniestro.lugar` | |
+| `cantonDirectionSinister` | `siniestro.lugar` | Código de provincia → nombre (`"411"` → `"Chiriquí"`); fallback `placeDirectionSinister` |
 | `storyDetail` | `siniestro.descripcion` | Relato del conductor |
 | `coverages[0].coverageName` | `poliza.cobertura` | Puede ser `[]` — ver nota |
 | `driverId` | `conductor.cedula` | Cédula panameña |
-| `driverName` | `conductor.nombre` | |
-| `driverLastName` | `conductor.apellido` | Tiene leading space — se aplica `.strip()` |
+| `driverName` | `conductor.nombre` | Solo el **primer** nombre (primera palabra) |
+| `driverName` (palabras 2+) + `driverLastName` | `conductor.apellido` | Premium espera segundo nombre + apellido en la misma casilla |
 | `driverGender` | `conductor.sexo` | Entero: `2=M`, `1=F` (confirmado 2026-04-16) |
 | `driverBirthDate` | `conductor.edad` | ISO date → edad calculada en años |
 | `IndResponsible` | `conductor.responsabilidad` | `"" → "Pendiente"`, `"1" → "Culpable"`, `"2" → "Inocente"` |
@@ -103,18 +103,14 @@ Cuando `coverages` está vacío, `_determinar_tipo_siniestro()` aplica sobre `st
 | `Robo` | robo, hurto, sustraccion, robaron, hurtaron |
 | `Incendio` | incendio, fuego, quemado |
 
-### Reglas de reserva (protocolo sección 8.5)
+### Monto de reserva
 
-| Cobertura contiene | Reserva |
-|---|---|
-| `COLISI` / `VUELCO` | $1,300 |
-| `ROBO` | $5,000 |
-| `INCENDIO` | $2,500 |
-| (default) | $1,000 |
+El monto de reserva es **siempre $1,300** — valor fijo por decisión del equipo de
+operaciones de Sura Panamá (`_RESERVA_FIJA` en `data_collector.py`). El equipo es
+quien decide cuándo y si ese valor cambia; el código no lo infiere desde la cobertura.
 
-> **Nota:** cuando `coverages: []`, la reserva queda en $1,000 (default) porque no
-> hay nombre de cobertura para clasificar. El tipo de siniestro sí se infiere desde
-> el relato, pero la reserva requiere el nombre formal de cobertura.
+> El módulo `sic_reclamo_client` conserva `_determinar_reserva()` (con la tabla
+> de montos por cobertura) como referencia histórica, pero no se usa en el flujo.
 
 ---
 
@@ -165,7 +161,7 @@ Output esperado con evento EJ1949 / 5134134:
 [OK] Reclamo armado:
      Póliza:       02-93-1142585-1
      Cobertura:    (vacía — coverages=[])
-     Reserva:      1000.0
+     Reserva:      1300.0
      Tipo:         Colision  ← inferido desde storyDetail
      Fecha:        2026-04-16 12:14
      Lugar:        Al frente del colegio San Vicente de Paul, Santiago.
@@ -468,7 +464,6 @@ Los campos se mapean automáticamente: tipo_siniestro → código Oracle Forms, 
 - [ ] **Propiedad Ajena / Personas Lesionadas** — pestañas pendientes cuando aplique
 
 ### Phase A — pendiente
-- [ ] **Reserva cuando `coverages: []`** — inferir desde `tipo` cuando cobertura vacía
 - [ ] **Confirmar `IndResponsible`** — valores "1"/"2" con equipo de operaciones Sura
 
 ### Infraestructura

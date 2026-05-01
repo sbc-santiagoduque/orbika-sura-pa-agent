@@ -39,7 +39,7 @@ class DatosConductor:
 @dataclass
 class DatosPoliza:
     cobertura: str                 # "POR COLISION O VUELCO" — de SIC (coverages)
-    reserva: float                 # 1300.0 — determinado por regla de negocio
+    reserva: float                 # fijo en 1300.0 por decisión del equipo (ver _RESERVA_FIJA en data_collector)
 
 
 @dataclass
