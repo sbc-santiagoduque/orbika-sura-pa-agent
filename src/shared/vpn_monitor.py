@@ -48,12 +48,16 @@ class VPNMonitor:
         vpn_profile: Optional[str] = None,
         host_interno: Optional[str] = None,
         timeout_2fa: int = 120,
+        vpn_username: Optional[str] = None,
+        vpn_password: Optional[str] = None,
     ):
         self._notificador      = notificador
         self._forticlient_path = forticlient_path or _FORTICLIENT_DEFAULT
         self._vpn_profile      = vpn_profile or "SURA VPN"
         self._host_interno     = host_interno
         self._timeout_2fa      = timeout_2fa
+        self._vpn_username     = vpn_username
+        self._vpn_password     = vpn_password
 
     @classmethod
     def desde_env(cls, notificador) -> "VPNMonitor":
@@ -63,6 +67,8 @@ class VPNMonitor:
             vpn_profile      = os.environ.get("VPN_PROFILE_NAME"),
             host_interno     = os.environ.get("VPN_HOST_INTERNO"),
             timeout_2fa      = int(os.environ.get("VPN_2FA_TIMEOUT", "120")),
+            vpn_username     = os.environ.get("VPN_USERNAME"),
+            vpn_password     = os.environ.get("VPN_PASSWORD"),
         )
 
     # ------------------------------------------------------------------
@@ -181,26 +187,26 @@ class VPNMonitor:
 
     def _click_conectar(self, ventana) -> bool:
         """
-        Selecciona el perfil VPN_PROFILE_NAME en la lista de FortiClient
-        y hace click en el botón Conectar.
+        Selecciona el perfil, rellena credenciales si están vacías y hace
+        click en Conectar.
 
         Estrategia:
-          1. Buscar elemento con texto igual a vpn_profile (item de la lista).
-          2. Hacer click en él para seleccionarlo/desplegarlo.
-          3. Buscar "Conectar" o "Connect" dentro de la ventana y hacer click.
-
-        Retorna True si se hizo click en Conectar, False si no se encontró.
+          1. Seleccionar perfil VPN_PROFILE_NAME en el dropdown.
+          2. Esperar 1.5 s para que el formulario actualice y muestren los campos.
+          3. Rellenar "Nombre de Usuario" y "Contraseña" si están vacíos
+             (solo si VPN_USERNAME / VPN_PASSWORD están en .env).
+          4. Click en "Conectar".
         """
         try:
             ventana.set_focus()
             time.sleep(0.5)
 
-            # Paso 1: seleccionar el perfil en la lista
+            # Paso 1: seleccionar el perfil en el dropdown
             try:
                 perfil_el = ventana.child_window(title=self._vpn_profile)
                 if perfil_el.exists(timeout=3):
                     perfil_el.click_input()
-                    time.sleep(0.8)
+                    time.sleep(1.5)  # esperar que el form muestre los campos
                     self._notificador.info(f"Perfil '{self._vpn_profile}' seleccionado")
                 else:
                     self._notificador.alerta(
@@ -210,14 +216,18 @@ class VPNMonitor:
             except Exception as exc:
                 self._notificador.alerta(f"No se pudo seleccionar perfil: {exc}")
 
-            # Paso 2: click en Conectar / Connect
+            # Paso 2: rellenar credenciales si están configuradas
+            if self._vpn_username or self._vpn_password:
+                self._rellenar_credenciales()
+
+            # Paso 3: click en Conectar / Connect
             for texto in ("Conectar", "Connect", "CONECTAR", "CONNECT"):
                 try:
                     btn = ventana.child_window(title=texto, control_type="Button")
                     if btn.exists(timeout=2):
                         btn.click_input()
                         self._notificador.info(
-                            f"Click en '{texto}' — push MFA enviado a Authenticator"
+                            f"Click en '{texto}' — esperando aprobación MFA"
                         )
                         return True
                 except Exception:
@@ -228,6 +238,52 @@ class VPNMonitor:
         except Exception as exc:
             self._notificador.error(f"Error automatizando FortiClient UI: {exc}")
             return False
+
+    def _rellenar_credenciales(self) -> None:
+        """
+        Rellena los campos 'Nombre de Usuario' y 'Contraseña' de FortiClient
+        usando pyautogui (clicks directos + write) — sin pywinauto UIA para
+        evitar el escaneo lento del árbol de accesibilidad de Electron (~30s).
+
+        Coordenadas relativas a la ventana FortiClient (basadas en proporciones
+        del layout estándar: username ~61% desde arriba, password ~65.5%).
+        Si la ventana no se encuentra, loguea advertencia y continúa.
+        """
+        import pyautogui
+        try:
+            import pygetwindow as gw
+            wins = [w for w in gw.getAllWindows()
+                    if "FortiClient" in w.title and w.width > 100]
+            if not wins:
+                self._notificador.alerta("FortiClient no encontrado para rellenar credenciales")
+                return
+            win = wins[0]
+            wx, wy, ww, wh = win.left, win.top, win.width, win.height
+
+            # Campo Nombre de Usuario: ~47% desde izquierda, ~61% desde arriba
+            ux = wx + int(ww * 0.47)
+            uy = wy + int(wh * 0.61)
+            # Campo Contraseña: misma x, ~65.5% desde arriba
+            py_ = wy + int(wh * 0.655)
+
+            if self._vpn_username:
+                pyautogui.click(ux, uy)
+                time.sleep(0.20)
+                pyautogui.hotkey("ctrl", "a")
+                pyautogui.write(self._vpn_username, interval=0.04)
+                time.sleep(0.20)
+                self._notificador.info("Nombre de Usuario rellenado")
+
+            if self._vpn_password:
+                pyautogui.click(ux, py_)
+                time.sleep(0.20)
+                pyautogui.hotkey("ctrl", "a")
+                pyautogui.write(self._vpn_password, interval=0.04)
+                time.sleep(0.20)
+                self._notificador.info("Contraseña rellenada")
+
+        except Exception as exc:
+            self._notificador.alerta(f"No se pudieron rellenar credenciales VPN: {exc}")
 
     # ------------------------------------------------------------------
     # Espera
