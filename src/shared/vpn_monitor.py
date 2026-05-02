@@ -266,11 +266,14 @@ class VPNMonitor:
             # Campo Contraseña: misma x, ~65.5% desde arriba
             py_ = wy + int(wh * 0.655)
 
+            import pyperclip
+
             if self._vpn_username:
                 pyautogui.click(ux, uy)
                 time.sleep(0.20)
                 pyautogui.hotkey("ctrl", "a")
-                pyautogui.write(self._vpn_username, interval=0.04)
+                pyperclip.copy(self._vpn_username)
+                pyautogui.hotkey("ctrl", "v")
                 time.sleep(0.20)
                 self._notificador.info("Nombre de Usuario rellenado")
 
@@ -278,7 +281,8 @@ class VPNMonitor:
                 pyautogui.click(ux, py_)
                 time.sleep(0.20)
                 pyautogui.hotkey("ctrl", "a")
-                pyautogui.write(self._vpn_password, interval=0.04)
+                pyperclip.copy(self._vpn_password)
+                pyautogui.hotkey("ctrl", "v")
                 time.sleep(0.20)
                 self._notificador.info("Contraseña rellenada")
 
