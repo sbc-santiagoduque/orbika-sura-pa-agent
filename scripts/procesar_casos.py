@@ -342,6 +342,15 @@ _EXIT_FUERA_VIGENCIA     = 4
 _EXIT_NO_AUTORIZADO      = 5
 _EXIT_VALIDACION_CAMPO   = 6
 
+_EXIT_TERMINALES_B = frozenset({
+    0,
+    _EXIT_RECLAMO_EXISTENTE,
+    _EXIT_RECLAMO_DUPLICADO,
+    _EXIT_FUERA_VIGENCIA,
+    _EXIT_NO_AUTORIZADO,
+    _EXIT_VALIDACION_CAMPO,
+})
+
 
 def _rdp_activo() -> bool:
     """Retorna True si hay una ventana RDP activa y accesible."""
@@ -392,6 +401,31 @@ def _ejecutar_fase_b(datos_json_path: str, guardar: bool = False,
 
     result = subprocess.run(cmd)
     return result.returncode
+
+
+def _ejecutar_fase_b_watchdog(datos_json_path: str, guardar: bool,
+                               case_number: str, vpn_monitor, notif) -> int:
+    """
+    Ejecuta Phase B. Si falla con código no-terminal y la VPN está caída,
+    reconecta (con notificación Telegram) y reintenta una vez.
+    En el reintento, _rdp_activo() detecta automáticamente si RDP sigue
+    activo y elige --no-rdp/--no-premium o relanzado completo.
+    """
+    rc = _ejecutar_fase_b(datos_json_path, guardar=guardar, case_number=case_number)
+    if rc in _EXIT_TERMINALES_B:
+        return rc
+
+    if vpn_monitor is None or vpn_monitor.verificar():
+        return rc
+
+    notif.alerta(f"  [B] VPN caida durante Phase B (exit {rc}) — reconectando...")
+    ok = vpn_monitor.reconectar()
+    if not ok:
+        notif.error("  [B] VPN no reconectada — caso no reintentado")
+        return rc
+
+    notif.info("  [B] VPN reconectada — reintentando Phase B (RDP auto-detectado)...")
+    return _ejecutar_fase_b(datos_json_path, guardar=guardar, case_number=case_number)
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +621,10 @@ def main():
         estado.marcar_fase_b_iniciado(cn)
         estado.incrementar_intentos(cn, "b")
 
-        rc = _ejecutar_fase_b(str(datos_json), guardar=args.guardar, case_number=cn)
+        rc = _ejecutar_fase_b_watchdog(
+            str(datos_json), guardar=args.guardar,
+            case_number=cn, vpn_monitor=vpn_monitor, notif=notif,
+        )
 
         if rc == 0:
             estado.marcar_completado(cn)

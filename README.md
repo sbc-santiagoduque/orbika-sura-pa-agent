@@ -470,9 +470,12 @@ Los campos se mapean automáticamente: tipo_siniestro → código Oracle Forms, 
 - [ ] **Integrar a Bedrock agent** — registrar `create_reclamo_premium` como action group
 
 ### Deuda técnica — obligatorio antes de prod
-- [ ] **Split `open_premium.py`** — 2753 líneas / 50 funciones en un solo archivo. Dividir en módulos: `premium/rdp.py`, `premium/navigation.py`, `premium/formulario.py`, `premium/recovery.py`, `premium/ocr.py`
-- [ ] **Logging unificado en Phase B** — `open_premium.py` usa 302 `print()` sin timestamps ni contexto de caso. Pasar `Notificador` desde `procesar_casos.py` vía `--case-number` para trazabilidad nocturna
-- [ ] **Templates centralizados** — 24 referencias `_T("nombre.png")` dispersas. Reemplazar con diccionario `TEMPLATES = {...}` validado al arrancar para detectar templates faltantes antes del primer caso
+- [x] **Split `open_premium.py`** — `premium/` package con 8 módulos; `open_premium.py` bajó a 458 líneas (2026-04-30)
+- [x] **Logging unificado en Phase B** — `log()` centralizado en `premium/common.py`, rutas a `Notificador` (2026-04-30)
+- [x] **Templates centralizados** — `TEMPLATES` tuple + `validate_templates()` en `premium/common.py` (2026-04-30)
+
+### Futuro — mejora de robustez VPN
+- [ ] **Recovery Oracle Forms en retry con sesión viva** — cuando la VPN cae y el RDP sigue activo, `open_premium.py --no-rdp --no-premium` va directo a apertura sin verificar el estado de Oracle Forms. Si el proceso cayó a medio llenar Generales, puede haber un formulario abierto o un dialog de guardado. Solución: antes de `navigate_to_claim_apertura()`, verificar `is_at_main_menu()`; si no → `close_modal_no()` + `close_claim_and_return_home()`. Caso minoritario — el escenario dominante (VPN cae → RDP muere → reconexión completa) ya está cubierto.
 
 ---
 
