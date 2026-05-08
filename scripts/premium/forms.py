@@ -628,19 +628,47 @@ def save_claim() -> str | None:
 
     import pyautogui
     tab2_tpl = T("tab_generales_2.png")
+    res_tpl  = T("tab_reservas.png")
+    g1_ok = False
     if os.path.isfile(tab2_tpl):
-        try:
-            loc = pyautogui.locateOnScreen(tab2_tpl, confidence=0.85)
-            if loc:
-                cx = int(loc.left - loc.width * 0.5)
-                cy = int(loc.top  + loc.height / 2)
-                pyautogui.click(cx, cy)
-                time.sleep(0.80)
-                log(f"  → Click Generales (1) ({cx}, {cy})")
-        except pyautogui.ImageNotFoundException:
-            log("  [WARN] tab_generales_2.png not found — cannot go to G1")
-        except Exception as exc:
-            log(f"  [WARN] Error navigating to G1: {exc}")
+        for conf in (0.85, 0.75, 0.65):
+            try:
+                loc = pyautogui.locateOnScreen(tab2_tpl, confidence=conf)
+                if loc and loc.left > 100:
+                    cx = int(loc.left - loc.width * 0.5)
+                    cy = int(loc.top  + loc.height / 2)
+                    pyautogui.click(cx, cy)
+                    time.sleep(0.80)
+                    log(f"  → Click Generales (1) via G2 offset (conf={conf}) ({cx}, {cy})")
+                    g1_ok = True
+                    break
+                elif loc:
+                    log(f"  [SKIP] G2 at x={int(loc.left)} (< 100) — possible false positive")
+            except pyautogui.ImageNotFoundException:
+                pass
+            except Exception as exc:
+                log(f"  [WARN] Error searching G2 (conf={conf}): {exc}")
+
+    if not g1_ok and os.path.isfile(res_tpl):
+        for conf in (0.85, 0.75, 0.65):
+            try:
+                loc_r = pyautogui.locateOnScreen(res_tpl, confidence=conf)
+                if loc_r and loc_r.left > 100:
+                    cx = int(loc_r.left - loc_r.width * 4)
+                    cy = int(loc_r.top  + loc_r.height / 2)
+                    if cx > 50:
+                        pyautogui.click(cx, cy)
+                        time.sleep(0.80)
+                        log(f"  → Click Generales (1) via Reservas offset (conf={conf}) ({cx}, {cy})")
+                        g1_ok = True
+                        break
+            except pyautogui.ImageNotFoundException:
+                pass
+            except Exception as exc:
+                log(f"  [WARN] Error searching Reservas (conf={conf}): {exc}")
+
+    if not g1_ok:
+        log("  [WARN] Could not navigate to G1 — capturing current screen state")
 
     screenshot("paso_30_generales1.png", "Generales (1) post-save")
 

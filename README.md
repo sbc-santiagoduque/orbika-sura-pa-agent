@@ -458,8 +458,9 @@ Los campos se mapean automáticamente: tipo_siniestro → código Oracle Forms, 
 - [x] **Reclamo duplicado Oracle Forms** — `ReclamoDuplicadoError` exit 3 (2026-04-28)
 - [x] **Siniestro fuera de vigencia** — `SiniestroFueraVigenciaError` exit 4 (2026-04-28)
 - [x] **Generales (2) — Lugar donde se encuentra** — campo "Panama" + `with_spaces=True` global (2026-04-28)
-- [ ] **Calibrar `_guardar_reclamo()`** — validar secuencia Alt+Down+Enter; calibrar OCR No. de Reclamo
-- [ ] **Tesseract en PATH** — instalado pero ejecutable no encontrado; necesario para OCR número de reclamo
+- [x] **Tesseract OCR configurado** — `premium/common.py` detecta `AppData/Local/Programs/Tesseract-OCR/tesseract.exe` al importar el paquete; sobreescribible con `TESSERACT_CMD` en `.env` (2026-05-04)
+- [x] **Navegación G1 post-guardado robusta** — `save_claim()` alineada con `simulate_save()`: guard `loc.left > 100`, retry en 3 confidencias, fallback via `tab_reservas.png`; evita click a coordenadas negativas cuando G2 es detectado cerca del borde (2026-05-04)
+- [ ] **Calibrar OCR No. de Reclamo** — con Tesseract y G1 navigation ya funcionales, validar que el crop `(168+dx, 240+dy)→(420+dx, 265+dy)` capture el campo correcto en el entorno de producción; crear `label_no_reclamo.png` para mayor precisión
 - [ ] **Navegación multi-reclamo** — después de guardar, volver al menú apertura para el siguiente caso
 - [ ] **Propiedad Ajena / Personas Lesionadas** — pestañas pendientes cuando aplique
 

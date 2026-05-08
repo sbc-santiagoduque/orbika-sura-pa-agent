@@ -237,3 +237,21 @@ def find_on_screen(template_path: str, confidence: float = 0.8):
     except pyautogui.ImageNotFoundException:
         pass
     return None
+
+
+# ------------------------------------------------------------------
+# Tesseract OCR
+# ------------------------------------------------------------------
+
+_TESSERACT_DEFAULT = os.path.join(
+    os.path.expanduser("~"), "AppData", "Local", "Programs",
+    "Tesseract-OCR", "tesseract.exe",
+)
+
+try:
+    import pytesseract as _pyt
+    _tess_cmd = os.environ.get("TESSERACT_CMD", _TESSERACT_DEFAULT)
+    if os.path.isfile(_tess_cmd):
+        _pyt.pytesseract.tesseract_cmd = _tess_cmd
+except ImportError:
+    pass
