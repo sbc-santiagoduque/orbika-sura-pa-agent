@@ -33,6 +33,7 @@ scripts/capturas/
 scripts/resultados/
 scripts/datos/
 scripts/estado/
+scripts/informe*.xlsx
 
 # Claude Code
 .claude

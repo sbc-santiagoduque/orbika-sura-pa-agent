@@ -47,12 +47,28 @@ _RESERVAS = {
 }
 _RESERVA_DEFAULT = 1000.0
 
-# Inferencia de tipo de siniestro desde nombre de cobertura o descripción
-# Incluye términos de la cobertura Y del relato del conductor (storyDetail)
+# Mapeo directo desde el campo CollisionType del SIC API.
+# Los valores corresponden al name= de los checkboxes en el app SIC
+# (confirmado: CollisionType=2 → Colisión o Vuelco).
+# None en valor = tipo ambiguo (ej. Incendio/Robo) → inferir desde texto.
+_COLLISION_TYPE_MAP: dict[int, str | None] = {
+    1: "Comprensivo",   # Comprensivo
+    2: "Colision",      # Colisión o Vuelco  ← confirmado en campo real
+    3: "Otro",          # Lesiones Corporales
+    4: "Otro",          # Daños a la Propiedad Ajena
+    5: "Otro",          # Gastos Médicos
+    6: None,            # Incendio/Robo — distinguir por texto
+    7: "Otro",          # Asegurado
+    8: "Otro",          # Contraparte
+}
+
+# Inferencia de tipo de siniestro desde nombre de cobertura o descripción.
+# Usado como fallback cuando CollisionType no está presente o es ambiguo (code=6).
 _TIPOS_SINIESTRO = {
-    "Colision":  ["colisi", "vuelco", "choque", "impacto", "roce", "rozo",
-                  "golpe", "golp", "raspó", "raspo", "rasgu", "daño", "dano",
-                  "estrello", "colision", "accidente", "estacion", "vía"],
+    "Colision":  ["colisi", "vuelco", "choc", "impact", "roce", "rozo",
+                  "golpe", "golp", "raspo", "rasgu", "dano",
+                  "estrello", "colision", "accidente", "estacion", "rayon",
+                  "pego", "pegu", "via"],
     "Robo":      ["robo", "hurto", "sustraccion", "robaron", "hurtaron"],
     "Incendio":  ["incendio", "fuego", "quemado", "incendi"],
 }
@@ -75,6 +91,7 @@ def _normalizar(texto: str) -> str:
 def _determinar_tipo_siniestro(texto: str) -> str:
     """
     Infiere el tipo de siniestro desde el nombre de cobertura o descripción.
+    Usado como fallback cuando CollisionType no está presente o es ambiguo.
 
     Retorna: "Colision" | "Robo" | "Incendio" | "Otro"
     """
@@ -83,6 +100,30 @@ def _determinar_tipo_siniestro(texto: str) -> str:
         if any(p in texto_lower for p in palabras):
             return tipo
     return "Otro"
+
+
+def _tipo_desde_collision_type(collision_type_code, fallback_texto: str = "") -> str:
+    """
+    Determina tipo de siniestro desde el campo CollisionType del SIC API.
+
+    Para CollisionType=6 (Incendio/Robo), usa fallback_texto para distinguir.
+    Para códigos desconocidos o None, usa fallback_texto vía _determinar_tipo_siniestro.
+
+    Retorna: "Colision" | "Comprensivo" | "Robo" | "Incendio" | "Otro"
+    """
+    try:
+        code = int(collision_type_code)
+    except (TypeError, ValueError):
+        return _determinar_tipo_siniestro(fallback_texto)
+
+    if code not in _COLLISION_TYPE_MAP:
+        return _determinar_tipo_siniestro(fallback_texto)
+
+    tipo = _COLLISION_TYPE_MAP[code]
+    if tipo is None:
+        # Ambiguo (Incendio/Robo) — distinguir por texto
+        return _determinar_tipo_siniestro(fallback_texto)
+    return tipo
 
 
 def _determinar_reserva(cobertura: str) -> float:

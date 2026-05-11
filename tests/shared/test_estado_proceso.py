@@ -82,9 +82,9 @@ class TestEstadoProceso:
     def test_no_debe_saltar_pendiente(self, ep):
         assert ep.debe_saltar("02000099") is False
 
-    def test_no_debe_saltar_error_permanente(self, ep):
+    def test_debe_saltar_error_permanente(self, ep):
         ep.marcar_error_permanente("02000001", "timeout")
-        assert ep.debe_saltar("02000001") is False
+        assert ep.debe_saltar("02000001") is True
 
     def test_resumen(self, ep):
         ep.marcar_completado("C1", numero_reclamo="X")

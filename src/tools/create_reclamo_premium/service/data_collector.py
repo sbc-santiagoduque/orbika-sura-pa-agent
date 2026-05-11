@@ -26,6 +26,7 @@ from src.tools.create_reclamo_premium.infrastructure.sic_reclamo_client import (
     SICReclamoClient,
     _GENDER_MAP,
     _determinar_tipo_siniestro,
+    _tipo_desde_collision_type,
 )
 from src.tools.create_reclamo_premium.infrastructure.consulta_integral_scraper import (
     ConsultaIntegralScraper,
@@ -217,10 +218,12 @@ class DataCollector:
         # Daños al vehículo registrados por el inspector → Generales 3
         descripcion_danos = (evento.get("VehicleInjuryA") or "").strip()
 
-        # Tipo: inferir desde nombre de cobertura, luego desde relato del conductor
+        # Tipo: CollisionType (campo numérico directo del SIC) es fuente primaria.
+        # Fallback: coverageName, luego storyDetail vía _determinar_tipo_siniestro.
         coverages = evento.get("coverages") or []
         cobertura_nombre = coverages[0].get("coverageName", "") if coverages else ""
-        tipo = _determinar_tipo_siniestro(cobertura_nombre or descripcion)
+        fallback_texto = cobertura_nombre or descripcion
+        tipo = _tipo_desde_collision_type(evento.get("CollisionType"), fallback_texto)
 
         return DatosSiniestro(
             fecha=fecha,

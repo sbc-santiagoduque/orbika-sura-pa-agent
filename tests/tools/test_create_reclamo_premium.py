@@ -33,6 +33,7 @@ from src.tools.create_reclamo_premium.service.reclamo_models import (
 from src.tools.create_reclamo_premium.infrastructure.sic_reclamo_client import (
     SICReclamoClient,
     _determinar_tipo_siniestro,
+    _tipo_desde_collision_type,
     _determinar_reserva,
 )
 
@@ -806,6 +807,135 @@ class TestDeterminarTipoSiniestro:
 
     def test_vacio_retorna_otro(self):
         assert _determinar_tipo_siniestro("") == "Otro"
+
+    def test_choco_da_colision(self):
+        assert _determinar_tipo_siniestro("un camión me chocó en la autopista") == "Colision"
+
+    def test_impactando_da_colision(self):
+        assert _determinar_tipo_siniestro("impactando la Toyota Cross levemente en su parte trasera") == "Colision"
+
+    def test_rayon_da_colision(self):
+        assert _determinar_tipo_siniestro("le di un rayón al carro del vecino") == "Colision"
+
+    def test_pego_da_colision(self):
+        assert _determinar_tipo_siniestro("el taxi me pegó cuando cambió de carril") == "Colision"
+
+
+# ---------------------------------------------------------------------------
+# _tipo_desde_collision_type tests
+# Mapping confirmado desde HTML del app SIC (checkboxes name=N):
+#   1=Comprensivo, 2=Colisión o Vuelco, 3=Lesiones Corporales,
+#   4=Daños Propiedad Ajena, 5=Gastos Médicos, 6=Incendio/Robo,
+#   7=Asegurado, 8=Contraparte
+# ---------------------------------------------------------------------------
+
+class TestTipoDesdeCollisionType:
+
+    def test_2_da_colision(self):
+        # Confirmado en campo real: CollisionType=2 con evento Colisión o Vuelco
+        assert _tipo_desde_collision_type(2) == "Colision"
+
+    def test_1_da_comprensivo(self):
+        assert _tipo_desde_collision_type(1) == "Comprensivo"
+
+    def test_3_lesiones_da_otro(self):
+        assert _tipo_desde_collision_type(3) == "Otro"
+
+    def test_4_danos_propiedad_da_otro(self):
+        assert _tipo_desde_collision_type(4) == "Otro"
+
+    def test_5_gastos_medicos_da_otro(self):
+        assert _tipo_desde_collision_type(5) == "Otro"
+
+    def test_7_asegurado_da_otro(self):
+        assert _tipo_desde_collision_type(7) == "Otro"
+
+    def test_8_contraparte_da_otro(self):
+        assert _tipo_desde_collision_type(8) == "Otro"
+
+    def test_6_con_incendio_en_texto_da_incendio(self):
+        assert _tipo_desde_collision_type(6, "incendio total del vehículo") == "Incendio"
+
+    def test_6_con_robo_en_texto_da_robo(self):
+        assert _tipo_desde_collision_type(6, "robo del vehículo en zona céntrica") == "Robo"
+
+    def test_6_sin_texto_distinguible_da_otro(self):
+        assert _tipo_desde_collision_type(6, "nd") == "Otro"
+
+    def test_codigo_desconocido_usa_texto_como_fallback(self):
+        assert _tipo_desde_collision_type(99, "vuelco del vehículo") == "Colision"
+
+    def test_none_usa_texto_como_fallback(self):
+        assert _tipo_desde_collision_type(None, "choque fuerte en la vía") == "Colision"
+
+    def test_string_numerico_aceptado(self):
+        assert _tipo_desde_collision_type("2") == "Colision"
+
+
+# ---------------------------------------------------------------------------
+# DataCollector — CollisionType como fuente primaria
+# ---------------------------------------------------------------------------
+
+class TestDataCollectorCollisionType:
+
+    def _make_collector(self, sic_client=None):
+        collector = DataCollector.__new__(DataCollector)
+        collector._sic = sic_client or MagicMock()
+        collector._ci  = None
+        return collector
+
+    def test_collision_type_2_da_colision(self):
+        # Caso real confirmado: CollisionType=2 → Colisión o Vuelco
+        sic = MagicMock()
+        evento = {**EVENTO_SIC_DETAIL, "CollisionType": 2, "coverages": []}
+        sic.obtener_datos_evento.return_value = evento
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.siniestro.tipo == "Colision"
+
+    def test_collision_type_1_da_comprensivo(self):
+        sic = MagicMock()
+        evento = {**EVENTO_SIC_DETAIL, "CollisionType": 1, "coverages": []}
+        sic.obtener_datos_evento.return_value = evento
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.siniestro.tipo == "Comprensivo"
+
+    def test_collision_type_prioritario_sobre_story_detail(self):
+        sic = MagicMock()
+        # CollisionType=1 (Comprensivo) aunque storyDetail diga "choque"
+        evento = {**EVENTO_SIC_DETAIL, "CollisionType": 1, "storyDetail": "choque fuerte", "coverages": []}
+        sic.obtener_datos_evento.return_value = evento
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.siniestro.tipo == "Comprensivo"
+
+    def test_sin_collision_type_usa_coverageName(self):
+        sic = MagicMock()
+        evento = {k: v for k, v in EVENTO_SIC_DETAIL.items() if k != "CollisionType"}
+        sic.obtener_datos_evento.return_value = evento
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.siniestro.tipo == "Colision"
+
+    def test_collision_type_0_usa_texto_como_fallback(self):
+        sic = MagicMock()
+        evento = {**EVENTO_SIC_DETAIL, "CollisionType": 0, "coverages": [],
+                  "storyDetail": "me chocaron por detrás"}
+        sic.obtener_datos_evento.return_value = evento
+        collector = self._make_collector(sic)
+
+        resultado = collector.recolectar("02195167", "EJ1949", "5134134")
+
+        assert resultado.siniestro.tipo == "Colision"
 
 
 # ---------------------------------------------------------------------------

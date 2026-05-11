@@ -137,6 +137,7 @@ def main():
         print(f"     driverGender:    {evento.get('driverGender')}")
         print(f"     driverBirthDate: {evento.get('driverBirthDate')}")
         print(f"     IndResponsible:  '{evento.get('IndResponsible')}'")
+        print(f"     CollisionType:   {evento.get('CollisionType')}")
         coverages = evento.get("coverages") or []
         print(f"     coverages:       {[c.get('coverageName') for c in coverages]}")
         # Campos tarjeta de propiedad — intentar nombres conocidos
